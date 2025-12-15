@@ -2,7 +2,7 @@
 
 A web-controlled tank robot built with ESP32 and L298N motor driver, featuring a responsive web interface with speed control.
 
-![TankBot in Action](https://media.printables.com/media/prints/c64e85f3-400b-45c7-8b4f-89d8585d2e89/images/11422458_80e95876-a137-4991-bbf5-507c280b30a2_178607a1-adb3-4381-9bfa-b4c194a26536/ezgifcom-resize-2.gif)
+![TankBot in Action](images/tankbot-demo.gif)
 
 ## Hardware Components
 
