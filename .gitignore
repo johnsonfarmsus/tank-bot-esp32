@@ -1,0 +1,14 @@
+# PlatformIO build artifacts
+.pio
+
+# macOS system files
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+
+# Compiled files
+*.o
+*.elf
+*.bin
