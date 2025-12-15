@@ -2,13 +2,20 @@
 
 A web-controlled tank robot built with ESP32 and L298N motor driver, featuring a responsive web interface with speed control.
 
+![TankBot in Action](https://media.printables.com/media/prints/c64e85f3-400b-45c7-8b4f-89d8585d2e89/images/11422458_80e95876-a137-4991-bbf5-507c280b30a2_178607a1-adb3-4381-9bfa-b4c194a26536/ezgifcom-resize-2.gif)
+
 ## Hardware Components
 
 - **Microcontroller**: ESP32 DevKit (38-pin, CP2102, USB-C)
 - **Motor Driver**: L298N H-Bridge
-- **Motors**: 2x 33GB-520-18.7F DC motors
-- **Chassis**: TP101 Tank-style chassis (includes dual 18650 battery holder)
-- **Power**: 2x 18650 lithium batteries (7.4V nominal)
+- **Motors**: 2x 33GB-520-18.7F DC motors (included with chassis)
+- **Chassis**: TP101 Tank-style chassis ([widely available](https://www.google.com/search?client=safari&rls=en&q=TP101+chassis&ie=UTF-8&oe=UTF-8))
+- **Power**: 2x 18650 lithium batteries (7.4V nominal) (holder included with chassis)
+- **Fasteners**: 12x M3x6 screws
+
+### 3D Printed Parts
+
+Custom mounting brackets and accessories are available on Printables: [TankBot ESP32 on Printables](https://www.printables.com/model/1516204-tank-bot-esp32)
 
 ## Wiring Diagram
 
@@ -216,7 +223,3 @@ Then visit: http://192.168.4.1
 ## License
 
 Open source - feel free to modify and improve!
-
-## Acknowledgments
-
-Inspired by the [pen-plotter-esp32](https://github.com/johnsonfarmsus/pen-plotter-esp32) project.
