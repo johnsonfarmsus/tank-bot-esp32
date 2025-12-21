@@ -1,9 +1,22 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h>
+// Include ESPAsyncWebServer first to use its HTTP_* enum values
+#include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <ArduinoJson.h>
+#include <LittleFS.h>
+// Include PsychicHttp last and undef conflicting macros
+#undef HTTP_GET
+#undef HTTP_POST
+#undef HTTP_PUT
+#undef HTTP_DELETE
+#undef HTTP_HEAD
+#undef HTTP_PATCH
+#undef HTTP_OPTIONS
+#include <PsychicHttp.h>
+#include "cert_pem.h"
 
 // Motor control pins
 #define IN1 16  // Left motor direction
@@ -24,12 +37,21 @@
 #define SPEED_MEDIUM 220
 #define SPEED_FAST 255
 
+// Connection limits
+#define MAX_TOTAL_CLIENTS 6
+#define MAX_VIEWERS 4
+
 // WiFi credentials
 const char* ssid = "TankBot";
 const char* password = "tankbot2025";
 
-// Web server on port 80
-WebServer server(80);
+// HTTP AsyncWebServer for all pages and WebSocket (port 80)
+AsyncWebServer httpServer(80);
+AsyncWebSocket ws("/ws");
+
+// HTTPS PsychicHttp server for secure pages and WebSocket (port 443)
+PsychicHttpsServer secureServer;
+PsychicWebSocketHandler wss;
 
 // DNS server for captive portal
 DNSServer dnsServer;
@@ -42,8 +64,24 @@ Preferences preferences;
 int currentSpeed = SPEED_MEDIUM;
 
 // Trim adjustment for compensating track tension differences
-// Range: -20 to +20 (negative = left motor slower, positive = right motor slower)
 int motorTrim = 0;
+
+// Client tracking structures
+struct TankBotClient {
+  uint32_t id;
+  String role;  // "controller", "streamer", "viewer", "none"
+};
+
+std::vector<TankBotClient> clients;
+uint32_t controllerClientId = 0;
+uint32_t streamerClientId = 0;
+
+// Secure WebSocket client tracking (for HTTPS connections)
+PsychicWebSocketClient* streamerClient = nullptr;
+PsychicWebSocketClient* controllerClient = nullptr;
+
+// Frame counter for viewer frame skipping
+uint32_t frameCounter = 0;
 
 // Function declarations
 void stopMotors();
@@ -51,14 +89,20 @@ void moveForward();
 void moveBackward();
 void turnLeft();
 void turnRight();
+void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t len);
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
+String getConnectionStatus();
+TankBotClient* getClientById(uint32_t id);
+int getViewerCount();
 
-// HTML page for the web interface
-const char MAIN_page[] PROGMEM = R"=====(
+// Landing page HTML
+const char LANDING_page[] PROGMEM = R"=====(
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TankBot Control</title>
+  <title>TankBot Control Center</title>
   <style>
     * {
       margin: 0;
@@ -73,7 +117,6 @@ const char MAIN_page[] PROGMEM = R"=====(
       width: 100vw;
       overflow: hidden;
       position: fixed;
-      touch-action: none;
     }
 
     body {
@@ -87,299 +130,99 @@ const char MAIN_page[] PROGMEM = R"=====(
     .container {
       background: white;
       border-radius: 20px;
-      padding: 30px;
+      padding: 40px;
       box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      max-width: 400px;
+      max-width: 500px;
       width: 100%;
-      max-height: 95vh;
-      overflow-y: auto;
-      touch-action: pan-y;
-      position: relative;
     }
 
     h1 {
       text-align: center;
       color: #333;
-      margin-bottom: 30px;
-      font-size: 2em;
+      margin-bottom: 10px;
+      font-size: 2.2em;
     }
 
-    .speed-control {
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 1em;
+    }
+
+    .status-info {
+      background: #f0f0f0;
+      border-radius: 10px;
+      padding: 15px;
       margin-bottom: 30px;
       text-align: center;
     }
 
-    .speed-label {
-      font-size: 1.2em;
+    .status-item {
+      margin: 5px 0;
       color: #555;
-      margin-bottom: 10px;
-      display: block;
     }
 
-    .speed-value {
-      font-size: 1.5em;
-      color: #667eea;
-      font-weight: bold;
-      margin: 10px 0;
-    }
-
-    .speed-slider {
-      width: 100%;
-      height: 8px;
-      border-radius: 5px;
-      background: #ddd;
-      outline: none;
-      -webkit-appearance: none;
-    }
-
-    .speed-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 25px;
-      height: 25px;
-      border-radius: 50%;
-      background: #667eea;
-      cursor: pointer;
-    }
-
-    .speed-slider::-moz-range-thumb {
-      width: 25px;
-      height: 25px;
-      border-radius: 50%;
-      background: #667eea;
-      cursor: pointer;
-      border: none;
-    }
-
-    .controls {
+    .mode-buttons {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 20px;
+      gap: 15px;
     }
 
-    .btn {
+    .mode-btn {
       background: #667eea;
       color: white;
       border: none;
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 20px;
-      font-size: 1.2em;
+      font-size: 1.1em;
       cursor: pointer;
       transition: all 0.3s;
-      user-select: none;
-      -webkit-user-select: none;
-      touch-action: manipulation;
+      text-align: left;
+      position: relative;
     }
 
-    .btn:active {
+    .mode-btn:hover {
       background: #5568d3;
-      transform: scale(0.95);
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
     }
 
-    .btn:disabled {
+    .mode-btn:active {
+      transform: translateY(0);
+    }
+
+    .mode-btn.full {
       background: #ccc;
       cursor: not-allowed;
     }
 
-    .btn-forward {
-      grid-column: 2;
+    .mode-btn.full:hover {
+      transform: none;
+      box-shadow: none;
     }
 
-    .btn-left {
-      grid-column: 1;
-      grid-row: 2;
-    }
-
-    .btn-stop {
-      grid-column: 2;
-      grid-row: 2;
-      background: #e74c3c;
-    }
-
-    .btn-stop:active {
-      background: #c0392b;
-    }
-
-    .btn-right {
-      grid-column: 3;
-      grid-row: 2;
-    }
-
-    .btn-backward {
-      grid-column: 2;
-      grid-row: 3;
-    }
-
-    .status {
-      text-align: center;
-      margin-top: 20px;
-      padding: 10px;
-      background: #f0f0f0;
-      border-radius: 10px;
-      color: #666;
-    }
-
-    .settings-btn {
-      position: absolute;
-      top: 15px;
-      right: 15px;
-      background: #888;
-      color: white;
-      border: none;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      font-size: 1.5em;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.3s;
-    }
-
-    .settings-btn:active {
-      background: #666;
-      transform: scale(0.95);
-    }
-
-    .control-toggle-btn {
-      position: absolute;
-      top: 15px;
-      left: 15px;
-      background: #667eea;
-      color: white;
-      border: none;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      font-size: 1em;
+    .mode-title {
       font-weight: bold;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.3s;
+      font-size: 1.2em;
+      margin-bottom: 5px;
     }
 
-    .control-toggle-btn:active {
-      background: #5568d3;
-      transform: scale(0.95);
-    }
-
-    .joystick-container {
-      display: none;
-      position: relative;
-      width: 200px;
-      height: 200px;
-      margin: 30px auto;
-      background: #f0f0f0;
-      border-radius: 50%;
-      box-shadow: inset 0 0 20px rgba(0,0,0,0.1);
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-
-    .joystick-container.active {
-      display: block;
-    }
-
-    .joystick-knob {
-      position: absolute;
-      width: 80px;
-      height: 80px;
-      background: #667eea;
-      border-radius: 50%;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      cursor: grab;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-      transition: background 0.2s;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-
-    .joystick-knob:active {
-      cursor: grabbing;
-      background: #5568d3;
-    }
-
-    .controls.hide {
-      display: none;
-    }
-
-    .modal {
-      display: none;
-      position: fixed;
-      z-index: 1000;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0,0,0,0.5);
-      align-items: center;
-      justify-content: center;
-    }
-
-    .modal.show {
-      display: flex;
-    }
-
-    .modal-content {
-      background: white;
-      padding: 30px;
-      border-radius: 20px;
-      max-width: 400px;
-      width: 90%;
-      position: relative;
-    }
-
-    .close-btn {
-      position: absolute;
-      top: 10px;
-      right: 15px;
-      font-size: 2em;
-      color: #888;
-      cursor: pointer;
-      border: none;
-      background: none;
-      line-height: 1;
-    }
-
-    .close-btn:hover {
-      color: #333;
-    }
-
-    .trim-control {
-      margin-top: 20px;
+    .mode-desc {
+      font-size: 0.85em;
+      opacity: 0.9;
     }
 
     @media (max-width: 480px) {
       .container {
-        padding: 20px;
+        padding: 25px;
       }
 
       h1 {
-        font-size: 1.5em;
+        font-size: 1.8em;
       }
 
-      .btn {
+      .mode-btn {
         padding: 15px;
-        font-size: 1em;
-      }
-
-      .settings-btn {
-        width: 35px;
-        height: 35px;
-        font-size: 1.2em;
-      }
-
-      .control-toggle-btn {
-        width: 35px;
-        height: 35px;
         font-size: 1em;
       }
     }
@@ -387,304 +230,120 @@ const char MAIN_page[] PROGMEM = R"=====(
 </head>
 <body>
   <div class="container">
-    <button class="control-toggle-btn" id="controlToggleBtn" title="Toggle Joystick">JS</button>
-    <button class="settings-btn" id="settingsBtn">&#9881;</button>
-
     <h1>TankBot</h1>
+    <div class="subtitle">Control Center</div>
 
-    <div class="speed-control">
-      <label class="speed-label">Speed Control</label>
-      <div class="speed-value" id="speedDisplay">Medium</div>
-      <input type="range" min="1" max="3" value="2" class="speed-slider" id="speedSlider">
-    </div>
+    <div class="mode-buttons">
+      <button class="mode-btn" id="btnBasic" onclick="location.href='/basic'">
+        <div class="mode-title">Basic Controls</div>
+        <div class="mode-desc">Simple button and joystick interface</div>
+      </button>
 
-    <!-- Joystick Control -->
-    <div class="joystick-container" id="joystickContainer">
-      <div class="joystick-knob" id="joystickKnob"></div>
-    </div>
+      <a href="https://192.168.4.1/enhanced" target="_blank" class="mode-btn" id="btnEnhanced" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-decoration: none;">
+        <div class="mode-title">Enhanced Controls</div>
+        <div class="mode-desc">FPV mode with video overlay and sensor data</div>
+      </a>
 
-    <!-- Button Controls -->
-    <div class="controls" id="buttonControls">
-      <button class="btn btn-forward" id="btnForward">^<br>Forward</button>
-      <button class="btn btn-left" id="btnLeft">&lt;<br>Left</button>
-      <button class="btn btn-stop" id="btnStop">X<br>Stop</button>
-      <button class="btn btn-right" id="btnRight">&gt;<br>Right</button>
-      <button class="btn btn-backward" id="btnBackward">v<br>Backward</button>
-    </div>
+      <button class="mode-btn" id="btnView" onclick="location.href='/view'">
+        <div class="mode-title">View Stream</div>
+        <div class="mode-desc">Watch-only mode (no controls)</div>
+      </button>
 
-    <div class="status" id="status">Ready</div>
-  </div>
-
-  <!-- Settings Modal -->
-  <div class="modal" id="settingsModal">
-    <div class="modal-content">
-      <button class="close-btn" id="closeModal">&times;</button>
-      <h2 style="margin-top: 0; color: #333;">Settings</h2>
-
-      <div class="trim-control">
-        <label class="speed-label">Steering Trim</label>
-        <div class="speed-value" id="trimDisplay">Center</div>
-        <input type="range" min="-20" max="20" value="0" class="speed-slider" id="trimSlider">
-        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Left &larr; | &rarr; Right</div>
-        <div style="font-size: 0.85em; color: #666; margin-top: 15px; line-height: 1.4;">
-          Adjust this slider to compensate for uneven track tension. If your robot drifts left, move the slider right, and vice versa.
-        </div>
-      </div>
+      <a href="https://192.168.4.1/stream-source" target="_blank" class="mode-btn" id="btnStream" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-decoration: none;">
+        <div class="mode-title">Stream Device</div>
+        <div class="mode-desc">Use this device as camera source (grant camera permission first)</div>
+      </a>
     </div>
   </div>
 
   <script>
-    const speedSlider = document.getElementById('speedSlider');
-    const speedDisplay = document.getElementById('speedDisplay');
-    const trimSlider = document.getElementById('trimSlider');
-    const trimDisplay = document.getElementById('trimDisplay');
-    const status = document.getElementById('status');
-    const settingsBtn = document.getElementById('settingsBtn');
-    const settingsModal = document.getElementById('settingsModal');
-    const closeModal = document.getElementById('closeModal');
-    const controlToggleBtn = document.getElementById('controlToggleBtn');
-    const joystickContainer = document.getElementById('joystickContainer');
-    const joystickKnob = document.getElementById('joystickKnob');
-    const buttonControls = document.getElementById('buttonControls');
+    let ws = null;
 
-    const speedNames = ['', 'Slow', 'Medium', 'Fast'];
-    let joystickMode = false;
-    let joystickActive = false;
-    let joystickInterval = null;
+    function connectWebSocket() {
+      ws = new WebSocket('ws://' + window.location.hostname + ':80/ws');
 
-    // Settings modal controls
-    settingsBtn.addEventListener('click', function() {
-      settingsModal.classList.add('show');
-    });
+      ws.onopen = function() {
+        console.log('WebSocket connected');
+        ws.send(JSON.stringify({type: 'status_request'}));
+      };
 
-    closeModal.addEventListener('click', function() {
-      settingsModal.classList.remove('show');
-    });
-
-    // Close modal when clicking outside
-    settingsModal.addEventListener('click', function(e) {
-      if (e.target === settingsModal) {
-        settingsModal.classList.remove('show');
-      }
-    });
-
-    // Control mode toggle
-    controlToggleBtn.addEventListener('click', function() {
-      joystickMode = !joystickMode;
-      if (joystickMode) {
-        joystickContainer.classList.add('active');
-        buttonControls.classList.add('hide');
-      } else {
-        joystickContainer.classList.remove('active');
-        buttonControls.classList.remove('hide');
-        sendCommand('move', 'stop');
-      }
-    });
-
-    // Joystick control logic
-    function handleJoystick(e) {
-      e.preventDefault();
-      const rect = joystickContainer.getBoundingClientRect();
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-
-      let clientX, clientY;
-      if (e.type.includes('touch')) {
-        clientX = e.touches[0].clientX - rect.left;
-        clientY = e.touches[0].clientY - rect.top;
-      } else {
-        clientX = e.clientX - rect.left;
-        clientY = e.clientY - rect.top;
-      }
-
-      let deltaX = clientX - centerX;
-      let deltaY = clientY - centerY;
-
-      // Constrain to circle
-      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      const maxDistance = (rect.width / 2) - 40; // Keep knob inside
-
-      if (distance > maxDistance) {
-        const angle = Math.atan2(deltaY, deltaX);
-        deltaX = Math.cos(angle) * maxDistance;
-        deltaY = Math.sin(angle) * maxDistance;
-      }
-
-      // Update knob position
-      joystickKnob.style.transform = `translate(calc(-50% + ${deltaX}px), calc(-50% + ${deltaY}px))`;
-
-      // Calculate motor speeds based on position
-      // deltaY: negative = forward, positive = backward
-      // deltaX: negative = left, positive = right
-      const forwardPower = -deltaY / maxDistance; // -1 to 1
-      const turnPower = deltaX / maxDistance; // -1 to 1
-
-      // Tank drive: mix forward and turn
-      let leftMotor = forwardPower - turnPower;
-      let rightMotor = forwardPower + turnPower;
-
-      // Normalize if over 1
-      const maxPower = Math.max(Math.abs(leftMotor), Math.abs(rightMotor));
-      if (maxPower > 1) {
-        leftMotor /= maxPower;
-        rightMotor /= maxPower;
-      }
-
-      // Send control command
-      sendJoystickCommand(leftMotor, rightMotor);
-    }
-
-    function sendJoystickCommand(left, right) {
-      // Convert -1 to 1 range to motor direction and speed
-      const leftDir = left >= 0 ? 'forward' : 'backward';
-      const rightDir = right >= 0 ? 'forward' : 'backward';
-      const leftSpeed = Math.abs(left);
-      const rightSpeed = Math.abs(right);
-
-      // Determine overall direction
-      if (Math.abs(left) < 0.1 && Math.abs(right) < 0.1) {
-        sendCommand('move', 'stop');
-      } else {
-        // Send a combined command with left and right motor values
-        fetch(`/joystick?left=${left.toFixed(2)}&right=${right.toFixed(2)}`)
-          .then(response => response.text())
-          .then(data => {
-            status.textContent = data;
-          })
-          .catch(error => {
-            console.error('Joystick error:', error);
-          });
-      }
-    }
-
-    function resetJoystick() {
-      joystickKnob.style.transform = 'translate(-50%, -50%)';
-      sendCommand('move', 'stop');
-      joystickActive = false;
-    }
-
-    // Joystick event listeners
-    joystickKnob.addEventListener('mousedown', function() {
-      joystickActive = true;
-    });
-
-    joystickKnob.addEventListener('touchstart', function() {
-      joystickActive = true;
-    });
-
-    document.addEventListener('mousemove', function(e) {
-      if (joystickActive && joystickMode) {
-        handleJoystick(e);
-      }
-    });
-
-    document.addEventListener('touchmove', function(e) {
-      if (joystickActive && joystickMode) {
-        handleJoystick(e);
-      }
-    });
-
-    document.addEventListener('mouseup', function() {
-      if (joystickActive) {
-        resetJoystick();
-      }
-    });
-
-    document.addEventListener('touchend', function() {
-      if (joystickActive) {
-        resetJoystick();
-      }
-    });
-
-    // Update speed display
-    speedSlider.addEventListener('input', function() {
-      const speed = this.value;
-      speedDisplay.textContent = speedNames[speed];
-      sendCommand('speed', speed);
-    });
-
-    // Update trim display and send command
-    trimSlider.addEventListener('input', function() {
-      const trim = parseInt(this.value);
-      if (trim === 0) {
-        trimDisplay.textContent = 'Center';
-      } else if (trim < 0) {
-        trimDisplay.textContent = 'Left ' + Math.abs(trim);
-      } else {
-        trimDisplay.textContent = 'Right ' + trim;
-      }
-      sendCommand('trim', trim);
-    });
-
-    // Button event listeners
-    document.getElementById('btnForward').addEventListener('mousedown', () => sendCommand('move', 'forward'));
-    document.getElementById('btnForward').addEventListener('touchstart', (e) => { e.preventDefault(); sendCommand('move', 'forward'); });
-
-    document.getElementById('btnBackward').addEventListener('mousedown', () => sendCommand('move', 'backward'));
-    document.getElementById('btnBackward').addEventListener('touchstart', (e) => { e.preventDefault(); sendCommand('move', 'backward'); });
-
-    document.getElementById('btnLeft').addEventListener('mousedown', () => sendCommand('move', 'left'));
-    document.getElementById('btnLeft').addEventListener('touchstart', (e) => { e.preventDefault(); sendCommand('move', 'left'); });
-
-    document.getElementById('btnRight').addEventListener('mousedown', () => sendCommand('move', 'right'));
-    document.getElementById('btnRight').addEventListener('touchstart', (e) => { e.preventDefault(); sendCommand('move', 'right'); });
-
-    document.getElementById('btnStop').addEventListener('mousedown', () => sendCommand('move', 'stop'));
-    document.getElementById('btnStop').addEventListener('touchstart', (e) => { e.preventDefault(); sendCommand('move', 'stop'); });
-
-    // Stop on button release
-    document.addEventListener('mouseup', () => sendCommand('move', 'stop'));
-    document.addEventListener('touchend', () => sendCommand('move', 'stop'));
-
-    function sendCommand(type, value) {
-      fetch(`/${type}?value=${value}`)
-        .then(response => response.text())
-        .then(data => {
-          status.textContent = data;
-        })
-        .catch(error => {
-          status.textContent = 'Error: ' + error;
-        });
-    }
-
-    // Load saved trim value on page load
-    fetch('/getTrim')
-      .then(response => response.text())
-      .then(trim => {
-        const trimValue = parseInt(trim);
-        trimSlider.value = trimValue;
-        if (trimValue === 0) {
-          trimDisplay.textContent = 'Center';
-        } else if (trimValue < 0) {
-          trimDisplay.textContent = 'Left ' + Math.abs(trimValue);
-        } else {
-          trimDisplay.textContent = 'Right ' + trimValue;
+      ws.onmessage = function(event) {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'status') {
+          updateStatus(msg);
         }
-      })
-      .catch(error => {
-        console.log('Could not load trim value');
-      });
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+      };
+
+      ws.onclose = function() {
+        console.log('WebSocket disconnected');
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    function updateStatus(status) {
+      const info = document.getElementById('statusInfo');
+      const controllerStatus = status.controller_available ? 'Available' : 'In Use';
+      const streamerStatus = status.streamer_active ? 'Active' : 'None';
+
+      info.innerHTML = `
+        <div class="status-item">Controller: ${controllerStatus}</div>
+        <div class="status-item">Stream: ${streamerStatus}</div>
+        <div class="status-item">Viewers: ${status.viewer_count}/4</div>
+        <div class="status-item">Connections: ${status.total_clients}/6</div>
+      `;
+
+      // Disable buttons if full
+      const btnEnhanced = document.getElementById('btnEnhanced');
+      const btnView = document.getElementById('btnView');
+      const btnStream = document.getElementById('btnStream');
+
+      if (!status.controller_available) {
+        btnEnhanced.classList.add('full');
+        btnEnhanced.onclick = () => alert('Controller already in use by another device.');
+      } else {
+        btnEnhanced.classList.remove('full');
+        btnEnhanced.onclick = () => location.href = '/enhanced';
+      }
+
+      if (status.streamer_active) {
+        btnStream.classList.add('full');
+        btnStream.onclick = () => alert('A stream device is already active.');
+      } else {
+        btnStream.classList.remove('full');
+        btnStream.onclick = () => location.href = '/stream-source';
+      }
+
+      if (status.viewer_count >= ${MAX_VIEWERS}) {
+        btnView.classList.add('full');
+        btnView.onclick = () => alert('Maximum viewers reached.');
+      } else {
+        btnView.classList.remove('full');
+        btnView.onclick = () => location.href = '/view';
+      }
+    }
+
+    connectWebSocket();
   </script>
 </body>
 </html>
 )=====";
 
 void setupMotors() {
-  // Set pin modes
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
 
-  // Configure PWM channels
   ledcSetup(PWM_CHANNEL_A, PWM_FREQ, PWM_RESOLUTION);
   ledcSetup(PWM_CHANNEL_B, PWM_FREQ, PWM_RESOLUTION);
 
-  // Attach PWM channels to pins
   ledcAttachPin(ENA, PWM_CHANNEL_A);
   ledcAttachPin(ENB, PWM_CHANNEL_B);
 
-  // Start with motors stopped
   stopMotors();
 }
 
@@ -698,18 +357,15 @@ void stopMotors() {
 }
 
 void moveForward() {
-  // What was "turnRight" - both motors spin to move forward
-  // Apply trim: negative trim = slow left motor, positive trim = slow right motor
   int leftSpeed = currentSpeed;
   int rightSpeed = currentSpeed;
 
   if (motorTrim < 0) {
-    leftSpeed = currentSpeed + motorTrim;  // Reduce left motor speed
+    leftSpeed = currentSpeed + motorTrim;
   } else if (motorTrim > 0) {
-    rightSpeed = currentSpeed - motorTrim; // Reduce right motor speed
+    rightSpeed = currentSpeed - motorTrim;
   }
 
-  // Ensure speeds stay in valid range
   leftSpeed = constrain(leftSpeed, 0, 255);
   rightSpeed = constrain(rightSpeed, 0, 255);
 
@@ -722,18 +378,15 @@ void moveForward() {
 }
 
 void moveBackward() {
-  // What was "turnLeft" - both motors reverse
-  // Apply trim: negative trim = slow left motor, positive trim = slow right motor
   int leftSpeed = currentSpeed;
   int rightSpeed = currentSpeed;
 
   if (motorTrim < 0) {
-    leftSpeed = currentSpeed + motorTrim;  // Reduce left motor speed
+    leftSpeed = currentSpeed + motorTrim;
   } else if (motorTrim > 0) {
-    rightSpeed = currentSpeed - motorTrim; // Reduce right motor speed
+    rightSpeed = currentSpeed - motorTrim;
   }
 
-  // Ensure speeds stay in valid range
   leftSpeed = constrain(leftSpeed, 0, 255);
   rightSpeed = constrain(rightSpeed, 0, 255);
 
@@ -746,7 +399,6 @@ void moveBackward() {
 }
 
 void turnLeft() {
-  // What was "moveForward" - spin left
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
   digitalWrite(IN3, HIGH);
@@ -756,7 +408,6 @@ void turnLeft() {
 }
 
 void turnRight() {
-  // What was "moveBackward" - spin right
   digitalWrite(IN1, LOW);
   digitalWrite(IN2, HIGH);
   digitalWrite(IN3, LOW);
@@ -765,143 +416,369 @@ void turnRight() {
   ledcWrite(PWM_CHANNEL_B, currentSpeed);
 }
 
-void handleRoot() {
-  server.send(200, "text/html", MAIN_page);
+// Get client by ID
+TankBotClient* getClientById(uint32_t id) {
+  for (auto &client : clients) {
+    if (client.id == id) {
+      return &client;
+    }
+  }
+  return nullptr;
 }
 
-// Handle captive portal detection requests
-void handleCaptivePortal() {
-  server.send(200, "text/html", MAIN_page);
+// Get viewer count
+int getViewerCount() {
+  int count = 0;
+  for (auto &client : clients) {
+    if (client.role == "viewer") {
+      count++;
+    }
+  }
+  return count;
 }
 
-void handleMove() {
-  if (server.hasArg("value")) {
-    String direction = server.arg("value");
+// Get connection status
+String getConnectionStatus() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "status";
+  doc["controller_available"] = (controllerClientId == 0);
+  doc["streamer_active"] = (streamerClientId != 0);
+  doc["viewer_count"] = getViewerCount();
+  doc["total_clients"] = clients.size();
 
-    if (direction == "forward") {
-      moveForward();
-      server.send(200, "text/plain", "Moving Forward");
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+// Handle WebSocket messages
+void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, (char*)data);
+
+    if (error) {
+      Serial.print("JSON parse error: ");
+      Serial.println(error.c_str());
+      return;
     }
-    else if (direction == "backward") {
-      moveBackward();
-      server.send(200, "text/plain", "Moving Backward");
+
+    String type = doc["type"];
+    uint32_t clientId = client->id();  // Use actual WebSocket client ID
+
+    // Handle status request
+    if (type == "status_request") {
+      AsyncWebSocketClient *client = ws.client(clientId);
+      if (client) {
+        client->text(getConnectionStatus());
+      }
+      return;
     }
-    else if (direction == "left") {
-      turnLeft();
-      server.send(200, "text/plain", "Turning Left");
+
+    // Handle role registration
+    if (type == "register") {
+      String role = doc["role"];
+      Serial.printf("Registration request from client %u for role: %s\n", clientId, role.c_str());
+      TankBotClient *client = getClientById(clientId);
+
+      if (!client) {
+        // New client
+        TankBotClient newClient;
+        newClient.id = clientId;
+        newClient.role = "none";
+        clients.push_back(newClient);
+        client = getClientById(clientId);
+      }
+
+      // Check if role is available
+      bool roleAccepted = false;
+      StaticJsonDocument<128> response;
+
+      if (role == "controller") {
+        if (controllerClientId == 0 || controllerClientId == clientId) {
+          controllerClientId = clientId;
+          client->role = "controller";
+          roleAccepted = true;
+        } else {
+          response["type"] = "role_rejected";
+          response["role"] = "controller";
+          response["reason"] = "Controller already in use";
+        }
+      } else if (role == "streamer") {
+        if (streamerClientId == 0 || streamerClientId == clientId) {
+          streamerClientId = clientId;
+          client->role = "streamer";
+          roleAccepted = true;
+        } else {
+          response["type"] = "role_rejected";
+          response["role"] = "streamer";
+          response["reason"] = "Streamer already active";
+        }
+      } else if (role == "viewer") {
+        if (getViewerCount() < MAX_VIEWERS) {
+          client->role = "viewer";
+          roleAccepted = true;
+        } else {
+          response["type"] = "role_rejected";
+          response["role"] = "viewer";
+          response["reason"] = "Maximum viewers reached";
+        }
+      }
+
+      if (roleAccepted) {
+        response["type"] = "role_accepted";
+        response["role"] = role;
+        Serial.printf("Client %u registered as %s - ACCEPTED\n", clientId, role.c_str());
+      } else {
+        Serial.printf("Client %u registration REJECTED\n", clientId);
+      }
+
+      String output;
+      serializeJson(response, output);
+      Serial.printf("Sending response to client %u: %s\n", clientId, output.c_str());
+      AsyncWebSocketClient *wsClient = ws.client(clientId);
+      if (wsClient) {
+        wsClient->text(output);
+        Serial.printf("Response sent successfully\n");
+      } else {
+        Serial.printf("ERROR: Could not find WebSocket client %u\n", clientId);
+      }
+
+      // Broadcast status update to all clients
+      ws.textAll(getConnectionStatus());
+      return;
     }
-    else if (direction == "right") {
-      turnRight();
-      server.send(200, "text/plain", "Turning Right");
+
+    // Handle motor commands (only from controller)
+    TankBotClient *sender = getClientById(clientId);
+    if (sender && sender->role == "controller") {
+      if (type == "motor") {
+        String direction = doc["direction"];
+
+        if (direction == "forward") moveForward();
+        else if (direction == "backward") moveBackward();
+        else if (direction == "left") turnLeft();
+        else if (direction == "right") turnRight();
+        else if (direction == "stop") stopMotors();
+      }
+      else if (type == "joystick") {
+        float leftPower = doc["left"];
+        float rightPower = doc["right"];
+
+        int leftSpeed = abs(leftPower * currentSpeed);
+        int rightSpeed = abs(rightPower * currentSpeed);
+
+        if (motorTrim < 0) {
+          leftSpeed = constrain(leftSpeed + (motorTrim * abs(leftPower)), 0, 255);
+        } else if (motorTrim > 0) {
+          rightSpeed = constrain(rightSpeed - (motorTrim * abs(rightPower)), 0, 255);
+        }
+
+        if (leftPower >= 0) {
+          digitalWrite(IN1, HIGH);
+          digitalWrite(IN2, LOW);
+        } else {
+          digitalWrite(IN1, LOW);
+          digitalWrite(IN2, HIGH);
+        }
+
+        if (rightPower >= 0) {
+          digitalWrite(IN3, LOW);
+          digitalWrite(IN4, HIGH);
+        } else {
+          digitalWrite(IN3, HIGH);
+          digitalWrite(IN4, LOW);
+        }
+
+        ledcWrite(PWM_CHANNEL_A, leftSpeed);
+        ledcWrite(PWM_CHANNEL_B, rightSpeed);
+      }
+      else if (type == "speed") {
+        int speedLevel = doc["value"];
+        switch(speedLevel) {
+          case 1: currentSpeed = SPEED_SLOW; break;
+          case 2: currentSpeed = SPEED_MEDIUM; break;
+          case 3: currentSpeed = SPEED_FAST; break;
+        }
+      }
+      else if (type == "trim") {
+        motorTrim = doc["value"];
+        motorTrim = constrain(motorTrim, -20, 20);
+
+        preferences.begin("tankbot", false);
+        preferences.putInt("trim", motorTrim);
+        preferences.end();
+
+        Serial.printf("Trim saved: %d\n", motorTrim);
+      }
     }
-    else if (direction == "stop") {
-      stopMotors();
-      server.send(200, "text/plain", "Stopped");
+
+    // Handle video frames from streamer - relay to controller and viewers
+    if (sender && sender->role == "streamer" && type == "video") {
+      String frame = doc["frame"];
+
+      // Always send to controller (full framerate)
+      if (controllerClientId != 0) {
+        AsyncWebSocketClient *controllerWs = ws.client(controllerClientId);
+        if (controllerWs && controllerWs->status() == WS_CONNECTED) {
+          String controllerMsg;
+          serializeJson(doc, controllerMsg);
+          controllerWs->text(controllerMsg);
+        }
+      }
+
+      // Send to viewers with frame skipping (every other frame)
+      frameCounter++;
+      if (frameCounter % 2 == 0) {
+        for (auto &client : clients) {
+          if (client.role == "viewer") {
+            AsyncWebSocketClient *viewerWs = ws.client(client.id);
+            if (viewerWs && viewerWs->status() == WS_CONNECTED) {
+              String viewerMsg;
+              serializeJson(doc, viewerMsg);
+              viewerWs->text(viewerMsg);
+            }
+          }
+        }
+      }
+      return;
     }
-    else {
-      server.send(400, "text/plain", "Invalid direction");
+
+    // Handle sensor data from streamer - relay to all viewers and controller
+    if (sender && sender->role == "streamer" && type == "sensor") {
+      // Send to controller
+      if (controllerClientId != 0) {
+        AsyncWebSocketClient *controllerWs = ws.client(controllerClientId);
+        if (controllerWs && controllerWs->status() == WS_CONNECTED) {
+          String sensorMsg;
+          serializeJson(doc, sensorMsg);
+          controllerWs->text(sensorMsg);
+        }
+      }
+
+      // Send to all viewers
+      for (auto &client : clients) {
+        if (client.role == "viewer") {
+          AsyncWebSocketClient *viewerWs = ws.client(client.id);
+          if (viewerWs && viewerWs->status() == WS_CONNECTED) {
+            String sensorMsg;
+            serializeJson(doc, sensorMsg);
+            viewerWs->text(sensorMsg);
+          }
+        }
+      }
+      return;
     }
-  } else {
-    server.send(400, "text/plain", "Missing direction parameter");
   }
 }
 
-void handleSpeed() {
-  if (server.hasArg("value")) {
-    int speedLevel = server.arg("value").toInt();
+// WebSocket event handler
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
 
-    switch(speedLevel) {
-      case 1:
-        currentSpeed = SPEED_SLOW;
-        server.send(200, "text/plain", "Speed: Slow");
-        break;
-      case 2:
-        currentSpeed = SPEED_MEDIUM;
-        server.send(200, "text/plain", "Speed: Medium");
-        break;
-      case 3:
-        currentSpeed = SPEED_FAST;
-        server.send(200, "text/plain", "Speed: Fast");
-        break;
-      default:
-        server.send(400, "text/plain", "Invalid speed level");
+      // Check connection limit
+      if (ws.count() > MAX_TOTAL_CLIENTS) {
+        Serial.printf("Connection limit reached, rejecting client #%u\n", client->id());
+        StaticJsonDocument<128> response;
+        response["type"] = "error";
+        response["message"] = "Connection limit reached";
+        String output;
+        serializeJson(response, output);
+        client->text(output);
+        client->close();
         return;
-    }
-  } else {
-    server.send(400, "text/plain", "Missing speed parameter");
+      }
+
+      // Add client with no role initially
+      {
+        TankBotClient newClient;
+        newClient.id = client->id();
+        newClient.role = "none";
+        clients.push_back(newClient);
+      }
+
+      // Send current status
+      client->text(getConnectionStatus());
+      break;
+
+    case WS_EVT_DISCONNECT:
+      Serial.printf("WebSocket client #%u disconnected\n", client->id());
+
+      // Remove client and free up their role
+      {
+        TankBotClient *disconnectedClient = getClientById(client->id());
+        if (disconnectedClient) {
+          if (disconnectedClient->role == "controller") {
+            controllerClientId = 0;
+            Serial.println("Controller disconnected");
+          } else if (disconnectedClient->role == "streamer") {
+            streamerClientId = 0;
+            Serial.println("Streamer disconnected");
+          }
+
+          // Remove from vector
+          clients.erase(
+            std::remove_if(clients.begin(), clients.end(),
+              [client](const TankBotClient& c) { return c.id == client->id(); }),
+            clients.end()
+          );
+        }
+      }
+
+      // Broadcast updated status
+      ws.textAll(getConnectionStatus());
+      break;
+
+    case WS_EVT_DATA:
+      handleWebSocketMessage(client, arg, data, len);
+      break;
+
+    case WS_EVT_PONG:
+    case WS_EVT_ERROR:
+      break;
   }
 }
 
-void handleTrim() {
-  if (server.hasArg("value")) {
-    motorTrim = server.arg("value").toInt();
-
-    // Constrain to valid range
-    if (motorTrim < -20) motorTrim = -20;
-    if (motorTrim > 20) motorTrim = 20;
-
-    // Save to persistent storage
-    preferences.begin("tankbot", false);
-    preferences.putInt("trim", motorTrim);
-    preferences.end();
-
-    Serial.print("Trim saved: ");
-    Serial.println(motorTrim);
-
-    server.send(200, "text/plain", "Trim: " + String(motorTrim));
-  } else {
-    server.send(400, "text/plain", "Missing trim parameter");
-  }
+// HTTPS server handler functions
+void handleRoot(HTTPRequest *req, HTTPResponse *res) {
+  res->setHeader("Content-Type", "text/html");
+  res->print(LANDING_page);
 }
 
-void handleGetTrim() {
-  server.send(200, "text/plain", String(motorTrim));
+void handleFromFile(HTTPRequest *req, HTTPResponse *res, const char *filename) {
+  File file = LittleFS.open(filename, "r");
+  if (!file) {
+    res->setStatusCode(404);
+    res->print("File not found");
+    return;
+  }
+
+  res->setHeader("Content-Type", "text/html");
+  while (file.available()) {
+    res->write(file.read());
+  }
+  file.close();
 }
 
-void handleJoystick() {
-  if (server.hasArg("left") && server.hasArg("right")) {
-    float leftPower = server.arg("left").toFloat();  // -1 to 1
-    float rightPower = server.arg("right").toFloat(); // -1 to 1
+void handleBasic(HTTPRequest *req, HTTPResponse *res) {
+  handleFromFile(req, res, "/basic.html");
+}
 
-    // Convert to motor speeds (0-255) with direction
-    int leftSpeed = abs(leftPower * currentSpeed);
-    int rightSpeed = abs(rightPower * currentSpeed);
+void handleEnhanced(HTTPRequest *req, HTTPResponse *res) {
+  handleFromFile(req, res, "/enhanced.html");
+}
 
-    // Apply trim to both motors
-    if (motorTrim < 0) {
-      leftSpeed = constrain(leftSpeed + (motorTrim * abs(leftPower)), 0, 255);
-    } else if (motorTrim > 0) {
-      rightSpeed = constrain(rightSpeed - (motorTrim * abs(rightPower)), 0, 255);
-    }
+void handleView(HTTPRequest *req, HTTPResponse *res) {
+  handleFromFile(req, res, "/view.html");
+}
 
-    // Set motor directions and speeds
-    if (leftPower >= 0) {
-      // Left forward
-      digitalWrite(IN1, HIGH);
-      digitalWrite(IN2, LOW);
-    } else {
-      // Left backward
-      digitalWrite(IN1, LOW);
-      digitalWrite(IN2, HIGH);
-    }
-
-    if (rightPower >= 0) {
-      // Right forward
-      digitalWrite(IN3, LOW);
-      digitalWrite(IN4, HIGH);
-    } else {
-      // Right backward
-      digitalWrite(IN3, HIGH);
-      digitalWrite(IN4, LOW);
-    }
-
-    ledcWrite(PWM_CHANNEL_A, leftSpeed);
-    ledcWrite(PWM_CHANNEL_B, rightSpeed);
-
-    server.send(200, "text/plain", "Joystick: L=" + String(leftPower) + " R=" + String(rightPower));
-  } else {
-    server.send(400, "text/plain", "Missing joystick parameters");
-  }
+void handleStreamSource(HTTPRequest *req, HTTPResponse *res) {
+  handleFromFile(req, res, "/stream-source.html");
 }
 
 void setup() {
@@ -910,12 +787,19 @@ void setup() {
 
   Serial.println("\n\n=== TankBot Starting ===");
 
-  // Load saved trim value from persistent storage
-  preferences.begin("tankbot", true);  // true = read-only mode
-  motorTrim = preferences.getInt("trim", 0);  // default to 0 if not found
+  // Load saved trim value
+  preferences.begin("tankbot", true);
+  motorTrim = preferences.getInt("trim", 0);
   preferences.end();
   Serial.print("Loaded trim value: ");
   Serial.println(motorTrim);
+
+  // Initialize LittleFS
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+  } else {
+    Serial.println("LittleFS mounted successfully");
+  }
 
   // Setup motors
   setupMotors();
@@ -926,7 +810,7 @@ void setup() {
   Serial.println(ssid);
 
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
+  WiFi.softAP(ssid, password, 1, 0, MAX_TOTAL_CLIENTS + 2);
 
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -936,7 +820,7 @@ void setup() {
   dnsServer.start(DNS_PORT, "*", IP);
   Serial.println("DNS server started for captive portal");
 
-  // Setup mDNS responder
+  // Setup mDNS
   if (MDNS.begin("tank")) {
     Serial.println("mDNS responder started");
     Serial.println("You can access at: http://tank.local");
@@ -945,28 +829,206 @@ void setup() {
     Serial.println("Error setting up mDNS responder!");
   }
 
-  // Setup web server routes
-  server.on("/", handleRoot);
-  server.on("/move", handleMove);
-  server.on("/speed", handleSpeed);
-  server.on("/trim", handleTrim);
-  server.on("/getTrim", handleGetTrim);
-  server.on("/joystick", handleJoystick);
+  // Setup HTTP server (port 80) for main pages, captive portal, and WebSocket
+  httpServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/html", LANDING_page);
+  });
 
-  // Captive portal detection endpoints for different platforms
-  server.on("/generate_204", handleCaptivePortal);  // Android
-  server.on("/gen_204", handleCaptivePortal);       // Android
-  server.on("/hotspot-detect.html", handleCaptivePortal);  // iOS
-  server.on("/library/test/success.html", handleCaptivePortal);  // iOS
-  server.on("/success.txt", handleCaptivePortal);   // Windows
-  server.on("/ncsi.txt", handleCaptivePortal);      // Windows
-  server.on("/connecttest.txt", handleCaptivePortal); // Windows
+  httpServer.on("/basic", HTTP_GET, [](AsyncWebServerRequest *request){
+    File file = LittleFS.open("/basic.html", "r");
+    if (!file) {
+      request->send(404, "text/plain", "File not found");
+      return;
+    }
+    request->send(LittleFS, "/basic.html", "text/html");
+  });
 
-  // Catch-all for any other requests
-  server.onNotFound(handleCaptivePortal);
+  httpServer.on("/enhanced", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/enhanced.html", "text/html");
+  });
 
-  server.begin();
-  Serial.println("HTTP server started");
+  httpServer.on("/view", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/view.html", "text/html");
+  });
+
+  httpServer.on("/stream-source", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/stream-source.html", "text/html");
+  });
+
+  // Captive portal endpoints - redirect to main page
+  httpServer.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/library/test/success.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+  httpServer.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("http://" + request->host() + "/");
+  });
+
+  // WebSocket handler
+  ws.onEvent(onWebSocketEvent);
+  httpServer.addHandler(&ws);
+
+  httpServer.begin();
+  Serial.println("HTTP server started on port 80");
+
+  // Setup PsychicHttp HTTPS server for secure pages and WebSocket (port 443)
+  secureServer.setCertificate(SSL_CERT_PEM, SSL_KEY_PEM);
+
+  // Serve stream-source.html page over HTTPS
+  secureServer.on("/stream-source", HTTP_GET, [](PsychicRequest *request) {
+    File file = LittleFS.open("/stream-source.html", "r");
+    if (file) {
+      String content = file.readString();
+      file.close();
+      return request->reply(200, "text/html", content.c_str());
+    }
+    return request->reply(404, "text/plain", "File not found");
+  });
+
+  // Serve enhanced.html page over HTTPS
+  secureServer.on("/enhanced", HTTP_GET, [](PsychicRequest *request) {
+    File file = LittleFS.open("/enhanced.html", "r");
+    if (file) {
+      String content = file.readString();
+      file.close();
+      return request->reply(200, "text/html", content.c_str());
+    }
+    return request->reply(404, "text/plain", "File not found");
+  });
+
+  // Setup secure WebSocket (wss://) handler
+  wss.onOpen([](PsychicWebSocketClient *client) {
+    Serial.printf("[Secure WS] Client #%u connected\n", client->socket());
+  });
+
+  wss.onFrame([](PsychicWebSocketRequest *request, httpd_ws_frame *frame) -> esp_err_t {
+    String msg = String((char*)frame->payload).substring(0, frame->len);
+    Serial.printf("[Secure WS] Received from #%u: %s\n", request->client()->socket(), msg.c_str());
+
+    // Parse and handle message using existing onWebSocketEvent logic
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, msg);
+
+    if (!error) {
+      String msgType = doc["type"].as<String>();
+
+      // Handle registration
+      if (msgType == "register") {
+        String role = doc["role"].as<String>();
+        uint32_t clientId = doc["client_id"];
+
+        if (role == "streamer") {
+          if (streamerClient == nullptr) {
+            streamerClient = request->client();
+            DynamicJsonDocument response(256);
+            response["type"] = "role_accepted";
+            response["role"] = "streamer";
+            String responseStr;
+            serializeJson(response, responseStr);
+            request->reply(responseStr.c_str());
+            Serial.println("[Secure WS] Streamer registered");
+          } else {
+            DynamicJsonDocument response(256);
+            response["type"] = "role_rejected";
+            response["role"] = "streamer";
+            response["reason"] = "Streamer already connected";
+            String responseStr;
+            serializeJson(response, responseStr);
+            request->reply(responseStr.c_str());
+          }
+        } else if (role == "controller") {
+          if (controllerClient == nullptr) {
+            controllerClient = request->client();
+            DynamicJsonDocument response(256);
+            response["type"] = "role_accepted";
+            response["role"] = "controller";
+            String responseStr;
+            serializeJson(response, responseStr);
+            request->reply(responseStr.c_str());
+            Serial.println("[Secure WS] Controller registered");
+          } else {
+            DynamicJsonDocument response(256);
+            response["type"] = "role_rejected";
+            response["role"] = "controller";
+            response["reason"] = "Controller already connected";
+            String responseStr;
+            serializeJson(response, responseStr);
+            request->reply(responseStr.c_str());
+          }
+        }
+      }
+      // Handle video frames - forward to controller
+      else if (msgType == "video" && request->client() == streamerClient) {
+        if (controllerClient != nullptr) {
+          controllerClient->sendMessage(msg.c_str());
+        }
+        // Also forward to HTTP WebSocket viewers
+        ws.textAll(msg);
+      }
+      // Handle sensor data - forward to controller
+      else if (msgType == "sensor" && request->client() == streamerClient) {
+        if (controllerClient != nullptr) {
+          controllerClient->sendMessage(msg.c_str());
+        }
+        // Also forward to HTTP WebSocket viewers
+        ws.textAll(msg);
+      }
+      // Handle motor commands from controller
+      else if (msgType == "motor" && request->client() == controllerClient) {
+        String direction = doc["direction"].as<String>();
+
+        // Execute motor commands directly
+        if (direction == "forward") moveForward();
+        else if (direction == "backward") moveBackward();
+        else if (direction == "left") turnLeft();
+        else if (direction == "right") turnRight();
+        else if (direction == "stop") stopMotors();
+      }
+      // Handle speed commands from controller
+      else if (msgType == "speed" && request->client() == controllerClient) {
+        int speedValue = doc["value"];
+        currentSpeed = speedValue;
+        Serial.printf("Speed set to: %d\n", speedValue);
+      }
+    }
+
+    return ESP_OK;
+  });
+
+  wss.onClose([](PsychicWebSocketClient *client) {
+    Serial.printf("[Secure WS] Client #%u disconnected\n", client->socket());
+
+    // Clear client references if they disconnect
+    if (client == streamerClient) {
+      streamerClient = nullptr;
+      Serial.println("[Secure WS] Streamer disconnected");
+    }
+    if (client == controllerClient) {
+      controllerClient = nullptr;
+      Serial.println("[Secure WS] Controller disconnected");
+    }
+  });
+
+  secureServer.attachHandler("/ws", &wss);
+
+  Serial.println("Starting HTTPS server...");
+  secureServer.listen(443);
+  Serial.println("HTTPS server started on port 443 with secure WebSocket support");
+
   Serial.println("\n=== TankBot Ready! ===");
   Serial.print("Connect to WiFi: ");
   Serial.println(ssid);
@@ -981,5 +1043,5 @@ void setup() {
 
 void loop() {
   dnsServer.processNextRequest();
-  server.handleClient();
+  ws.cleanupClients();
 }

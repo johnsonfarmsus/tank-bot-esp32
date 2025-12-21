@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TankBot - Enhanced Controls</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      font-family: Arial, sans-serif;
+      background: #000;
+      height: 100vh;
+      height: 100dvh; /* Use dynamic viewport height on mobile */
+      width: 100vw;
+      overflow: hidden;
+      position: fixed;
+      touch-action: none;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #videoDisplay {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+    }
+
+    .sensor-overlay {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      left: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.8em;
+    }
+
+    .sensor-overlay div {
+      margin: 3px 0;
+    }
+
+    .status-overlay {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      right: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.8em;
+      max-width: 140px;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+
+    .status-indicator.active {
+      background: #4CAF50;
+    }
+
+    .status-indicator.inactive {
+      background: #f44336;
+    }
+
+    .control-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+      padding: 10px 15px max(10px, env(safe-area-inset-bottom)) 15px;
+      pointer-events: auto;
+    }
+
+    .speed-control {
+      margin-bottom: 8px;
+      text-align: center;
+      color: white;
+    }
+
+    .speed-value {
+      font-size: 1.1em;
+      font-weight: bold;
+      margin: 3px 0;
+    }
+
+    .speed-slider {
+      width: 100%;
+      max-width: 300px;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.3);
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+    }
+
+    .speed-slider::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+      border: none;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    .btn {
+      background: rgba(102, 126, 234, 0.8);
+      color: white;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.95em;
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+      touch-action: manipulation;
+    }
+
+    .btn:active {
+      background: rgba(85, 104, 211, 0.9);
+      transform: scale(0.95);
+    }
+
+    .btn-forward {
+      grid-column: 2;
+    }
+
+    .btn-left {
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    .btn-stop {
+      grid-column: 2;
+      grid-row: 2;
+      background: rgba(231, 76, 60, 0.8);
+    }
+
+    .btn-stop:active {
+      background: rgba(192, 57, 43, 0.9);
+    }
+
+    .btn-right {
+      grid-column: 3;
+      grid-row: 2;
+    }
+
+    .btn-backward {
+      grid-column: 2;
+      grid-row: 3;
+    }
+
+    .back-btn {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(136, 136, 136, 0.6);
+      color: white;
+      border: none;
+      border-radius: 20px;
+      padding: 6px 16px;
+      font-size: 0.85em;
+      cursor: pointer;
+      text-decoration: none;
+      pointer-events: auto;
+    }
+
+    .back-btn:active {
+      background: rgba(102, 102, 102, 0.8);
+    }
+
+    .no-stream {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      text-align: center;
+      font-size: 1.2em;
+    }
+
+    @media (max-width: 480px) {
+      .controls {
+        gap: 8px;
+      }
+
+      .btn {
+        padding: 12px;
+        font-size: 0.9em;
+      }
+    }
+  </style>
+</head>
+<body>
+  <img id="videoDisplay" alt="Video Stream">
+
+  <div class="overlay">
+    <a href="/" class="back-btn">Back to Menu</a>
+
+    <div class="sensor-overlay">
+      <div>Heading: <span id="heading">--</span></div>
+      <div>Pitch: <span id="pitch">--</span></div>
+      <div>Roll: <span id="roll">--</span></div>
+    </div>
+
+    <div class="status-overlay">
+      <div>
+        <span class="status-indicator" id="streamIndicator"></span>
+        <span id="streamStatus">Connecting...</span>
+      </div>
+      <div style="margin-top: 5px; font-size: 0.8em;">
+        High Quality | <span id="fpsDisplay">0</span> FPS
+      </div>
+    </div>
+
+    <div id="noStream" class="no-stream" style="display:none;">
+      <div>No video stream available</div>
+      <div style="font-size: 0.8em; margin-top: 10px;">Waiting for stream device...</div>
+    </div>
+
+    <div class="control-overlay">
+      <div class="speed-control">
+        <div class="speed-value" id="speedDisplay">Medium</div>
+        <input type="range" min="1" max="3" value="2" class="speed-slider" id="speedSlider">
+      </div>
+
+      <div class="controls">
+        <button class="btn btn-forward" id="btnForward">^<br>Forward</button>
+        <button class="btn btn-left" id="btnLeft">&lt;<br>Left</button>
+        <button class="btn btn-stop" id="btnStop">X<br>Stop</button>
+        <button class="btn btn-right" id="btnRight">&gt;<br>Right</button>
+        <button class="btn btn-backward" id="btnBackward">v<br>Back</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let myClientId = Date.now();
+    let lastFrameTime = Date.now();
+    let frameCount = 0;
+    let fpsUpdateTime = Date.now();
+
+    const videoDisplay = document.getElementById('videoDisplay');
+    const noStream = document.getElementById('noStream');
+    const speedSlider = document.getElementById('speedSlider');
+    const speedDisplay = document.getElementById('speedDisplay');
+    const streamStatus = document.getElementById('streamStatus');
+    const streamIndicator = document.getElementById('streamIndicator');
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    const headingEl = document.getElementById('heading');
+    const pitchEl = document.getElementById('pitch');
+    const rollEl = document.getElementById('roll');
+
+    const speedNames = ['', 'Slow', 'Medium', 'Fast'];
+
+    function connectWebSocket() {
+      // Use IP address directly to avoid captive portal DNS issues
+      const host = window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? window.location.hostname : '192.168.4.1';
+
+      // Use secure WebSocket (wss://) when page is loaded via HTTPS
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const port = window.location.protocol === 'https:' ? '443' : '80';
+      const wsUrl = protocol + '//' + host + ':' + port + '/ws';
+
+      console.log('Page protocol:', window.location.protocol);
+      console.log('Attempting WebSocket connection to:', wsUrl);
+      streamStatus.textContent = 'Connecting to ' + host;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = function() {
+        console.log('WebSocket connected!');
+        streamStatus.textContent = 'Registering...';
+        // Register as controller
+        const registerMsg = {
+          type: 'register',
+          role: 'controller',
+          client_id: myClientId
+        };
+        console.log('Sending registration:', registerMsg);
+        ws.send(JSON.stringify(registerMsg));
+      };
+
+      ws.onmessage = function(event) {
+        console.log('Received message:', event.data);
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'role_accepted' && msg.role === 'controller') {
+          console.log('Controller role accepted!');
+          streamStatus.textContent = 'Connected';
+          streamIndicator.className = 'status-indicator active';
+        } else if (msg.type === 'role_rejected') {
+          console.log('Role rejected:', msg.reason);
+          streamStatus.textContent = msg.reason;
+          streamIndicator.className = 'status-indicator inactive';
+          alert(msg.reason + '. Redirecting...');
+          setTimeout(() => location.href = '/', 2000);
+        } else if (msg.type === 'video') {
+          // Display video frame
+          videoDisplay.src = 'data:image/jpeg;base64,' + msg.frame;
+          noStream.style.display = 'none';
+
+          // Update FPS
+          frameCount++;
+          const now = Date.now();
+          if (now - fpsUpdateTime >= 1000) {
+            fpsDisplay.textContent = frameCount;
+            frameCount = 0;
+            fpsUpdateTime = now;
+          }
+        } else if (msg.type === 'sensor') {
+          // Update sensor data
+          headingEl.textContent = msg.heading ? msg.heading.toFixed(1) + '°' : '--';
+          pitchEl.textContent = msg.pitch ? msg.pitch.toFixed(1) + '°' : '--';
+          rollEl.textContent = msg.roll ? msg.roll.toFixed(1) + '°' : '--';
+        }
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+        streamStatus.textContent = 'WS Error';
+        streamIndicator.className = 'status-indicator inactive';
+      };
+
+      ws.onclose = function(event) {
+        console.log('WebSocket closed. Code:', event.code, 'Reason:', event.reason);
+        streamStatus.textContent = 'Disconnected (' + event.code + ')';
+        streamIndicator.className = 'status-indicator inactive';
+        noStream.style.display = 'block';
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    function sendMessage(msg) {
+      msg.client_id = myClientId;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    }
+
+    // Speed control
+    speedSlider.addEventListener('input', function() {
+      const speed = parseInt(this.value);
+      speedDisplay.textContent = speedNames[speed];
+      sendMessage({type: 'speed', value: speed});
+    });
+
+    // Button controls
+    document.getElementById('btnForward').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'forward'}));
+    document.getElementById('btnForward').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'forward'}); });
+
+    document.getElementById('btnBackward').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'backward'}));
+    document.getElementById('btnBackward').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'backward'}); });
+
+    document.getElementById('btnLeft').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'left'}));
+    document.getElementById('btnLeft').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'left'}); });
+
+    document.getElementById('btnRight').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'right'}));
+    document.getElementById('btnRight').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'right'}); });
+
+    document.getElementById('btnStop').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'stop'}));
+    document.getElementById('btnStop').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'stop'}); });
+
+    // Stop on button release
+    document.addEventListener('mouseup', () => sendMessage({type: 'motor', direction: 'stop'}));
+    document.addEventListener('touchend', () => sendMessage({type: 'motor', direction: 'stop'}));
+
+    // Show no stream message after 3 seconds if no frames received
+    setTimeout(() => {
+      if (frameCount === 0) {
+        noStream.style.display = 'block';
+      }
+    }, 3000);
+
+    connectWebSocket();
+  </script>
+</body>
+</html>

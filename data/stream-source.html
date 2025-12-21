@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TankBot - Stream Device</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      font-family: Arial, sans-serif;
+      background: #000;
+      height: 100vh;
+      height: 100dvh;
+      width: 100vw;
+      overflow: hidden;
+      position: fixed;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #videoPreview {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    #canvas {
+      display: none;
+    }
+
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+    }
+
+    .status-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: max(15px, env(safe-area-inset-top)) 15px 15px 15px;
+      pointer-events: auto;
+    }
+
+    .status-item {
+      margin: 5px 0;
+      font-size: 0.9em;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-indicator.active {
+      background: #4CAF50;
+    }
+
+    .status-indicator.inactive {
+      background: #f44336;
+    }
+
+    .controls {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 20px 20px max(20px, env(safe-area-inset-bottom)) 20px;
+      pointer-events: auto;
+    }
+
+    .btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 15px 30px;
+      font-size: 1em;
+      cursor: pointer;
+      margin: 5px;
+      transition: all 0.3s;
+    }
+
+    .btn:active {
+      background: #5568d3;
+      transform: scale(0.95);
+    }
+
+    .btn.danger {
+      background: #f44336;
+    }
+
+    .btn.danger:active {
+      background: #d32f2f;
+    }
+
+    .btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .quality-controls {
+      margin-top: 10px;
+      color: white;
+    }
+
+    .quality-controls label {
+      display: inline-block;
+      margin-right: 10px;
+      font-size: 0.9em;
+    }
+
+    .quality-controls select {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 4px;
+      padding: 5px;
+      margin-right: 15px;
+    }
+
+    .sensor-data {
+      position: absolute;
+      top: max(80px, calc(env(safe-area-inset-top) + 65px));
+      left: 15px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 0.85em;
+      pointer-events: none;
+    }
+
+    .sensor-data div {
+      margin: 3px 0;
+    }
+
+    .back-btn {
+      position: absolute;
+      top: max(15px, env(safe-area-inset-top));
+      right: 15px;
+      background: rgba(136, 136, 136, 0.8);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 1.2em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      line-height: 1;
+      pointer-events: auto;
+    }
+
+    .back-btn:active {
+      background: rgba(102, 102, 102, 0.8);
+    }
+
+    @media (max-width: 480px) {
+      .status-bar, .controls {
+        padding: 10px;
+      }
+
+      .btn {
+        padding: 12px 20px;
+        font-size: 0.9em;
+      }
+    }
+  </style>
+</head>
+<body>
+  <video id="videoPreview" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <div class="overlay">
+    <a href="/" class="back-btn">&lt;</a>
+
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="status-indicator" id="streamIndicator"></span>
+        <span id="streamStatus">Initializing...</span>
+      </div>
+      <div class="status-item">Viewers: <span id="viewerCount">0</span></div>
+      <div class="status-item">FPS: <span id="fpsDisplay">0</span> | Quality: <span id="qualityDisplay">480p</span></div>
+    </div>
+
+    <div class="sensor-data" id="sensorData">
+      <div>Heading: <span id="heading">--</span></div>
+      <div>Pitch: <span id="pitch">--</span></div>
+      <div>Roll: <span id="roll">--</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="startBtn">Start Streaming</button>
+      <button class="btn danger" id="stopBtn" style="display:none;">Stop Streaming</button>
+
+      <div class="quality-controls">
+        <label>
+          Resolution:
+          <select id="resolutionSelect">
+            <option value="320">320p</option>
+            <option value="480" selected>480p</option>
+            <option value="640">640p</option>
+          </select>
+        </label>
+        <label>
+          FPS:
+          <select id="fpsSelect">
+            <option value="10">10</option>
+            <option value="12" selected>12</option>
+            <option value="15">15</option>
+          </select>
+        </label>
+        <label>
+          Quality:
+          <select id="qualitySelect">
+            <option value="0.5">Low</option>
+            <option value="0.6" selected>Medium</option>
+            <option value="0.7">High</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let stream = null;
+    let streaming = false;
+    let streamInterval = null;
+    let sensorInterval = null;
+    let frameCount = 0;
+    let lastFpsUpdate = Date.now();
+
+    const video = document.getElementById('videoPreview');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const streamStatus = document.getElementById('streamStatus');
+    const streamIndicator = document.getElementById('streamIndicator');
+    const viewerCount = document.getElementById('viewerCount');
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    const qualityDisplay = document.getElementById('qualityDisplay');
+    const resolutionSelect = document.getElementById('resolutionSelect');
+    const fpsSelect = document.getElementById('fpsSelect');
+    const qualitySelect = document.getElementById('qualitySelect');
+
+    // Sensor data elements
+    const headingEl = document.getElementById('heading');
+    const pitchEl = document.getElementById('pitch');
+    const rollEl = document.getElementById('roll');
+
+    let currentResolution = 480;
+    let currentFps = 12;
+    let currentQuality = 0.6;
+
+    function connectWebSocket() {
+      // Use IP address directly to avoid captive portal DNS issues
+      const host = window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? window.location.hostname : '192.168.4.1';
+
+      // Use secure WebSocket (wss://) when page is loaded via HTTPS
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const port = window.location.protocol === 'https:' ? '443' : '80';
+      const wsUrl = protocol + '//' + host + ':' + port + '/ws';
+
+      console.log('Page protocol:', window.location.protocol);
+      console.log('Attempting WebSocket connection to:', wsUrl);
+      streamStatus.textContent = 'Connecting to ' + host;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = function() {
+        console.log('WebSocket connected!');
+        streamStatus.textContent = 'Registering...';
+        // Register as streamer
+        const registerMsg = {
+          type: 'register',
+          role: 'streamer',
+          client_id: Date.now()
+        };
+        console.log('Sending registration:', registerMsg);
+        ws.send(JSON.stringify(registerMsg));
+      };
+
+      ws.onmessage = function(event) {
+        console.log('Received:', event.data);
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'role_accepted' && msg.role === 'streamer') {
+          console.log('Streamer role accepted!');
+          streamStatus.textContent = 'Ready to stream';
+          streamIndicator.className = 'status-indicator active';
+          startBtn.disabled = false;
+        } else if (msg.type === 'role_rejected') {
+          console.log('Role rejected:', msg.reason);
+          streamStatus.textContent = 'Error: ' + msg.reason;
+          streamIndicator.className = 'status-indicator inactive';
+        } else if (msg.type === 'status') {
+          viewerCount.textContent = msg.viewer_count + (msg.controller_available ? 0 : 1);
+        }
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+        streamStatus.textContent = 'WS Error';
+        streamIndicator.className = 'status-indicator inactive';
+      };
+
+      ws.onclose = function(event) {
+        console.log('WebSocket closed. Code:', event.code, 'Reason:', event.reason);
+        streamStatus.textContent = 'Disconnected (' + event.code + ')';
+        streamIndicator.className = 'status-indicator inactive';
+        stopStreaming();
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    async function startCamera() {
+      try {
+        const constraints = {
+          video: {
+            facingMode: 'environment',
+            width: { ideal: currentResolution * 1.33 },
+            height: { ideal: currentResolution },
+            frameRate: { ideal: currentFps }
+          },
+          audio: false
+        };
+
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+
+        video.onloadedmetadata = function() {
+          canvas.width = currentResolution * 1.33;
+          canvas.height = currentResolution;
+        };
+
+        return true;
+      } catch (err) {
+        console.error('Camera error:', err);
+        streamStatus.textContent = 'Camera access denied';
+        streamIndicator.className = 'status-indicator inactive';
+
+        // Show helpful error message
+        let errorMsg = 'Camera access denied. ';
+        if (err.name === 'NotAllowedError') {
+          errorMsg += 'Please allow camera access in your browser settings.';
+        } else if (err.name === 'NotFoundError') {
+          errorMsg += 'No camera found on this device.';
+        } else if (err.name === 'NotSupportedError') {
+          errorMsg += 'Camera not supported over HTTP. Try using HTTPS or localhost.';
+        } else {
+          errorMsg += err.message || 'Unknown error';
+        }
+        alert(errorMsg);
+        return false;
+      }
+    }
+
+    function captureFrame() {
+      if (!streaming || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob(function(blob) {
+        if (blob && ws && ws.readyState === WebSocket.OPEN) {
+          const reader = new FileReader();
+          reader.onload = function() {
+            const base64 = reader.result.split(',')[1];
+            ws.send(JSON.stringify({
+              type: 'video',
+              frame: base64,
+              client_id: Date.now()
+            }));
+
+            // Update FPS counter
+            frameCount++;
+            const now = Date.now();
+            if (now - lastFpsUpdate >= 1000) {
+              fpsDisplay.textContent = frameCount;
+              frameCount = 0;
+              lastFpsUpdate = now;
+            }
+          };
+          reader.readAsDataURL(blob);
+        }
+      }, 'image/jpeg', currentQuality);
+    }
+
+    function captureSensorData() {
+      if (!streaming) return;
+
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener('deviceorientation', function(event) {
+          const heading = event.alpha ? event.alpha.toFixed(1) : '--';
+          const pitch = event.beta ? event.beta.toFixed(1) : '--';
+          const roll = event.gamma ? event.gamma.toFixed(1) : '--';
+
+          headingEl.textContent = heading + '°';
+          pitchEl.textContent = pitch + '°';
+          rollEl.textContent = roll + '°';
+
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'sensor',
+              heading: parseFloat(heading),
+              pitch: parseFloat(pitch),
+              roll: parseFloat(roll),
+              client_id: Date.now()
+            }));
+          }
+        });
+      }
+    }
+
+    async function startStreaming() {
+      currentResolution = parseInt(resolutionSelect.value);
+      currentFps = parseInt(fpsSelect.value);
+      currentQuality = parseFloat(qualitySelect.value);
+      qualityDisplay.textContent = currentResolution + 'p';
+
+      const cameraStarted = await startCamera();
+      if (!cameraStarted) return;
+
+      streaming = true;
+      streamStatus.textContent = 'Streaming';
+      streamIndicator.className = 'status-indicator active';
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'inline-block';
+
+      // Disable quality controls while streaming
+      resolutionSelect.disabled = true;
+      fpsSelect.disabled = true;
+      qualitySelect.disabled = true;
+
+      // Start frame capture
+      const frameInterval = 1000 / currentFps;
+      streamInterval = setInterval(captureFrame, frameInterval);
+
+      // Start sensor data capture
+      captureSensorData();
+      sensorInterval = setInterval(captureSensorData, 100);
+
+      // Keep screen awake
+      if ('wakeLock' in navigator) {
+        try {
+          await navigator.wakeLock.request('screen');
+        } catch (err) {
+          console.log('Wake lock error:', err);
+        }
+      }
+    }
+
+    function stopStreaming() {
+      streaming = false;
+
+      if (streamInterval) {
+        clearInterval(streamInterval);
+        streamInterval = null;
+      }
+
+      if (sensorInterval) {
+        clearInterval(sensorInterval);
+        sensorInterval = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      streamStatus.textContent = 'Stopped';
+      streamIndicator.className = 'status-indicator inactive';
+      startBtn.style.display = 'inline-block';
+      stopBtn.style.display = 'none';
+      fpsDisplay.textContent = '0';
+
+      // Re-enable quality controls
+      resolutionSelect.disabled = false;
+      fpsSelect.disabled = false;
+      qualitySelect.disabled = false;
+    }
+
+    startBtn.addEventListener('click', startStreaming);
+    stopBtn.addEventListener('click', stopStreaming);
+
+    // Request device orientation permission on iOS
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      startBtn.addEventListener('click', async function() {
+        try {
+          const permission = await DeviceOrientationEvent.requestPermission();
+          if (permission !== 'granted') {
+            alert('Device orientation permission denied');
+          }
+        } catch (err) {
+          console.error('Permission error:', err);
+        }
+      }, { once: true });
+    }
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
