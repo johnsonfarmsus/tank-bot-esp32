@@ -159,10 +159,17 @@
   </div>
 
   <script>
+    const CHUNK_SIZE = 2800;
+
     let ws = null;
     let myClientId = Date.now();
     let frameCount = 0;
     let fpsUpdateTime = Date.now();
+
+    // Frame reassembly for binary chunks
+    let frameBuffer = null;
+    let expectedChunks = 0;
+    let receivedChunks = 0;
 
     const videoDisplay = document.getElementById('videoDisplay');
     const noStream = document.getElementById('noStream');
@@ -176,10 +183,15 @@
     function connectWebSocket() {
       // Use IP address directly to avoid captive portal DNS issues
       const host = window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? window.location.hostname : '192.168.4.1';
-      ws = new WebSocket('ws://' + host + ':80/ws');
+      // MUST use WSS because page is served over HTTPS (mixed content policy)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const port = window.location.protocol === 'https:' ? ':443' : ':80';
+      ws = new WebSocket(protocol + '//' + host + port + '/ws');
+      ws.binaryType = 'arraybuffer';
 
       ws.onopen = function() {
         console.log('WebSocket connected');
+        streamStatus.textContent = 'Registering...';
         // Register as viewer
         ws.send(JSON.stringify({
           type: 'register',
@@ -189,34 +201,79 @@
       };
 
       ws.onmessage = function(event) {
-        const msg = JSON.parse(event.data);
+        // Handle text messages (JSON)
+        if (typeof event.data === 'string') {
+          const msg = JSON.parse(event.data);
+          console.log('Received:', msg);
 
-        if (msg.type === 'role_accepted' && msg.role === 'viewer') {
-          streamStatus.textContent = 'Connected';
-          streamIndicator.className = 'status-indicator active';
-        } else if (msg.type === 'role_rejected') {
-          streamStatus.textContent = msg.reason;
-          streamIndicator.className = 'status-indicator inactive';
-          alert(msg.reason + '. Redirecting...');
-          setTimeout(() => location.href = '/', 2000);
-        } else if (msg.type === 'video') {
-          // Display video frame
-          videoDisplay.src = 'data:image/jpeg;base64,' + msg.frame;
-          noStream.style.display = 'none';
-
-          // Update FPS
-          frameCount++;
-          const now = Date.now();
-          if (now - fpsUpdateTime >= 1000) {
-            fpsDisplay.textContent = frameCount;
-            frameCount = 0;
-            fpsUpdateTime = now;
+          if (msg.type === 'role_accepted' && msg.role === 'viewer') {
+            streamStatus.textContent = 'Connected';
+            streamIndicator.className = 'status-indicator active';
+          } else if (msg.type === 'role_rejected') {
+            streamStatus.textContent = msg.reason;
+            streamIndicator.className = 'status-indicator inactive';
+            alert(msg.reason + '. Redirecting...');
+            setTimeout(() => location.href = '/', 2000);
+          } else if (msg.type === 'sensor') {
+            // Update sensor data
+            headingEl.textContent = msg.heading ? msg.heading.toFixed(1) + '°' : '--';
+            pitchEl.textContent = msg.pitch ? msg.pitch.toFixed(1) + '°' : '--';
+            rollEl.textContent = msg.roll ? msg.roll.toFixed(1) + '°' : '--';
           }
-        } else if (msg.type === 'sensor') {
-          // Update sensor data
-          headingEl.textContent = msg.heading ? msg.heading.toFixed(1) + '°' : '--';
-          pitchEl.textContent = msg.pitch ? msg.pitch.toFixed(1) + '°' : '--';
-          rollEl.textContent = msg.roll ? msg.roll.toFixed(1) + '°' : '--';
+        }
+        // Handle binary messages (video chunks)
+        else if (event.data instanceof ArrayBuffer) {
+          const chunk = new Uint8Array(event.data);
+          if (chunk.length < 2) return;
+
+          const chunkIndex = chunk[0];
+          const totalChunks = chunk[1];
+          const chunkData = chunk.slice(2);
+
+          // Only log first chunk to reduce overhead
+          if (chunkIndex === 0 && frameCount % 30 === 0) {
+            console.log(`Receiving frame: ${totalChunks} chunks`);
+          }
+
+          // Initialize buffer on first chunk
+          if (chunkIndex === 0) {
+            expectedChunks = totalChunks;
+            receivedChunks = 0;
+            frameBuffer = new Uint8Array(totalChunks * CHUNK_SIZE);
+          }
+
+          // Copy chunk data
+          const offset = chunkIndex * CHUNK_SIZE;
+          frameBuffer.set(chunkData, offset);
+          receivedChunks++;
+
+          // Display frame when complete
+          if (receivedChunks === expectedChunks) {
+            const actualSize = offset + chunkData.length;
+            const frameData = frameBuffer.slice(0, actualSize);
+            const blob = new Blob([frameData], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+
+            videoDisplay.src = url;
+            noStream.style.display = 'none';
+
+            // Only log occasionally
+            if (frameCount % 30 === 0) {
+              console.log(`✓ Frame: ${actualSize} bytes`);
+            }
+
+            // Update FPS
+            frameCount++;
+            const now = Date.now();
+            if (now - fpsUpdateTime >= 1000) {
+              fpsDisplay.textContent = frameCount;
+              frameCount = 0;
+              fpsUpdateTime = now;
+            }
+
+            // Clean up old blob URL
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }
         }
       };
 
