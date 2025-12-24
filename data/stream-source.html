@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TankBot - Stream Device</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      font-family: Arial, sans-serif;
+      background: #000;
+      height: 100vh;
+      height: 100dvh;
+      width: 100vw;
+      overflow: hidden;
+      position: fixed;
+    }
+
+    body { display: flex; flex-direction: column; }
+
+    #videoPreview {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    #canvas { display: none; }
+
+    .overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+    }
+
+    .status-bar {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: max(15px, env(safe-area-inset-top)) 15px 15px 15px;
+      pointer-events: auto;
+    }
+
+    .status-item {
+      margin: 5px 0;
+      font-size: 0.9em;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-indicator.active { background: #4CAF50; }
+    .status-indicator.inactive { background: #f44336; }
+
+    .controls {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 20px 20px max(20px, env(safe-area-inset-bottom)) 20px;
+      pointer-events: auto;
+    }
+
+    .btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 15px 30px;
+      font-size: 1em;
+      cursor: pointer;
+      margin: 5px;
+      transition: all 0.3s;
+    }
+
+    .btn:active {
+      background: #5568d3;
+      transform: scale(0.95);
+    }
+
+    .btn.danger {
+      background: #f44336;
+    }
+
+    .btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .quality-controls {
+      margin-top: 10px;
+      color: white;
+    }
+
+    .quality-controls label {
+      display: inline-block;
+      margin-right: 10px;
+      font-size: 0.9em;
+    }
+
+    .quality-controls select {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 4px;
+      padding: 5px;
+      margin-right: 15px;
+    }
+
+    .back-btn {
+      position: absolute;
+      top: max(15px, env(safe-area-inset-top));
+      right: 15px;
+      background: rgba(136, 136, 136, 0.8);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 1.2em;
+      cursor: pointer;
+      pointer-events: auto;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <video id="videoPreview" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <div class="overlay">
+    <a href="/" class="back-btn">&lt;</a>
+
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="status-indicator" id="streamIndicator"></span>
+        <span id="streamStatus">Initializing...</span>
+      </div>
+      <div class="status-item">FPS: <span id="fpsDisplay">0</span> | Quality: <span id="qualityDisplay">240p</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="startBtn">Start Streaming</button>
+      <button class="btn danger" id="stopBtn" style="display:none;">Stop Streaming</button>
+
+      <div class="quality-controls">
+        <label>
+          Resolution:
+          <select id="resolutionSelect">
+            <option value="160" selected>160p (Recommended)</option>
+            <option value="240">240p</option>
+            <option value="320">320p (May lag)</option>
+          </select>
+        </label>
+        <label>
+          FPS:
+          <select id="fpsSelect">
+            <option value="8" selected>8 FPS (Stable)</option>
+            <option value="10">10 FPS</option>
+            <option value="12">12 FPS (May lag)</option>
+          </select>
+        </label>
+        <label>
+          Quality:
+          <select id="qualitySelect">
+            <option value="0.3" selected>Low (Stable)</option>
+            <option value="0.4">Medium</option>
+            <option value="0.5">High (May lag)</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const CHUNK_SIZE = 2800;  // Safe under 4KB WebSocket limit
+
+    let ws = null;
+    let stream = null;
+    let streaming = false;
+    let streamInterval = null;
+    let frameCount = 0;
+    let lastFpsUpdate = Date.now();
+
+    const video = document.getElementById('videoPreview');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const streamStatus = document.getElementById('streamStatus');
+    const streamIndicator = document.getElementById('streamIndicator');
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    const qualityDisplay = document.getElementById('qualityDisplay');
+    const resolutionSelect = document.getElementById('resolutionSelect');
+    const fpsSelect = document.getElementById('fpsSelect');
+    const qualitySelect = document.getElementById('qualitySelect');
+
+    // Lower defaults to reduce ESP32 memory pressure
+    let currentResolution = 160;  // Start with lowest resolution
+    let currentFps = 8;            // Lower FPS for better stability
+    let currentQuality = 0.3;      // Lower quality = smaller files
+
+    function connectWebSocket() {
+      const host = window.location.hostname || '192.168.4.1';
+      // MUST use WSS because page is served over HTTPS (mixed content policy)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const port = window.location.protocol === 'https:' ? ':443' : ':80';
+      const wsUrl = protocol + '//' + host + port + '/ws';
+
+      console.log('Connecting to:', wsUrl);
+      streamStatus.textContent = 'Connecting...';
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = function() {
+        console.log('✓ WebSocket OPEN');
+        streamStatus.textContent = 'Registering...';
+        ws.send(JSON.stringify({type: 'register', role: 'streamer'}));
+      };
+
+      ws.onmessage = function(event) {
+        const msg = JSON.parse(event.data);
+        console.log('✓ Received:', msg);
+
+        if (msg.type === 'role_accepted' && msg.role === 'streamer') {
+          console.log('✓ Role accepted as streamer');
+          streamStatus.textContent = 'Ready to stream';
+          streamIndicator.className = 'status-indicator active';
+          startBtn.disabled = false;
+        } else if (msg.type === 'role_rejected') {
+          console.log('✗ Role rejected:', msg.reason);
+          streamStatus.textContent = 'Error: ' + msg.reason;
+          streamIndicator.className = 'status-indicator inactive';
+          alert(msg.reason);
+        }
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+        streamStatus.textContent = 'Connection error';
+        streamIndicator.className = 'status-indicator inactive';
+      };
+
+      ws.onclose = function(event) {
+        console.log('WebSocket closed');
+        streamStatus.textContent = 'Disconnected';
+        streamIndicator.className = 'status-indicator inactive';
+        stopStreaming();
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    async function startCamera() {
+      try {
+        const constraints = {
+          video: {
+            facingMode: 'environment',
+            width: { ideal: currentResolution * 1.33 },
+            height: { ideal: currentResolution },
+            frameRate: { ideal: currentFps }
+          },
+          audio: false
+        };
+
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+
+        video.onloadedmetadata = function() {
+          canvas.width = currentResolution * 1.33;
+          canvas.height = currentResolution;
+        };
+
+        return true;
+      } catch (err) {
+        console.error('Camera error:', err);
+        streamStatus.textContent = 'Camera access denied';
+        streamIndicator.className = 'status-indicator inactive';
+        alert('Camera access denied: ' + err.message);
+        return false;
+      }
+    }
+
+    function captureFrame() {
+      if (!streaming) {
+        console.log('Not streaming');
+        return;
+      }
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+        console.log('Video not ready, state:', video.readyState);
+        return;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.log('WebSocket not open, state:', ws ? ws.readyState : 'null');
+        return;
+      }
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob(async function(blob) {
+        if (!blob) return;
+
+        // Convert blob to ArrayBuffer
+        const arrayBuffer = await blob.arrayBuffer();
+        const frameData = new Uint8Array(arrayBuffer);
+
+        // Calculate chunks needed
+        const totalChunks = Math.ceil(frameData.length / CHUNK_SIZE);
+
+        // Only log occasionally to reduce overhead
+        if (frameCount % 30 === 0) {  // Log every 30 frames
+          console.log(`Frame: ${frameData.length} bytes in ${totalChunks} chunks`);
+        }
+
+        // Send each chunk
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, frameData.length);
+          const chunkData = frameData.slice(start, end);
+
+          // Create chunk with header: [chunkIndex, totalChunks, ...data]
+          const chunk = new Uint8Array(chunkData.length + 2);
+          chunk[0] = i;
+          chunk[1] = totalChunks;
+          chunk.set(chunkData, 2);
+
+          ws.send(chunk.buffer);
+        }
+
+        // Update FPS counter
+        frameCount++;
+        const now = Date.now();
+        if (now - lastFpsUpdate >= 1000) {
+          fpsDisplay.textContent = frameCount;
+          frameCount = 0;
+          lastFpsUpdate = now;
+        }
+      }, 'image/jpeg', currentQuality);
+    }
+
+    async function startStreaming() {
+      currentResolution = parseInt(resolutionSelect.value);
+      currentFps = parseInt(fpsSelect.value);
+      currentQuality = parseFloat(qualitySelect.value);
+      qualityDisplay.textContent = currentResolution + 'p';
+
+      const cameraStarted = await startCamera();
+      if (!cameraStarted) return;
+
+      streaming = true;
+      streamStatus.textContent = 'Streaming';
+      streamIndicator.className = 'status-indicator active';
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'inline-block';
+
+      // Disable quality controls while streaming
+      resolutionSelect.disabled = true;
+      fpsSelect.disabled = true;
+      qualitySelect.disabled = true;
+
+      // Start frame capture
+      const frameInterval = 1000 / currentFps;
+      streamInterval = setInterval(captureFrame, frameInterval);
+
+      // Keep screen awake
+      if ('wakeLock' in navigator) {
+        try {
+          await navigator.wakeLock.request('screen');
+        } catch (err) {
+          console.log('Wake lock error:', err);
+        }
+      }
+    }
+
+    function stopStreaming() {
+      streaming = false;
+
+      if (streamInterval) {
+        clearInterval(streamInterval);
+        streamInterval = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      streamStatus.textContent = 'Stopped';
+      streamIndicator.className = 'status-indicator inactive';
+      startBtn.style.display = 'inline-block';
+      stopBtn.style.display = 'none';
+      fpsDisplay.textContent = '0';
+
+      // Re-enable quality controls
+      resolutionSelect.disabled = false;
+      fpsSelect.disabled = false;
+      qualitySelect.disabled = false;
+    }
+
+    startBtn.addEventListener('click', startStreaming);
+    stopBtn.addEventListener('click', stopStreaming);
+
+    connectWebSocket();
+  </script>
+</body>
+</html>

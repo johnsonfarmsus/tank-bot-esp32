@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TankBot - Basic Controls</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      position: fixed;
+      touch-action: none;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 400px;
+      width: 100%;
+      max-height: 95vh;
+      overflow-y: auto;
+      touch-action: pan-y;
+      position: relative;
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+      margin-bottom: 30px;
+      font-size: 2em;
+    }
+
+    .speed-control {
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .speed-label {
+      font-size: 1.2em;
+      color: #555;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .speed-value {
+      font-size: 1.5em;
+      color: #667eea;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+
+    .speed-slider {
+      width: 100%;
+      height: 8px;
+      border-radius: 5px;
+      background: #ddd;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 25px;
+      height: 25px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+    }
+
+    .speed-slider::-moz-range-thumb {
+      width: 25px;
+      height: 25px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+      border: none;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 20px;
+      font-size: 1.2em;
+      cursor: pointer;
+      transition: all 0.3s;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    .btn:active {
+      background: #5568d3;
+      transform: scale(0.95);
+    }
+
+    .btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .btn-forward {
+      grid-column: 2;
+    }
+
+    .btn-left {
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    .btn-stop {
+      grid-column: 2;
+      grid-row: 2;
+      background: #e74c3c;
+    }
+
+    .btn-stop:active {
+      background: #c0392b;
+    }
+
+    .btn-right {
+      grid-column: 3;
+      grid-row: 2;
+    }
+
+    .btn-backward {
+      grid-column: 2;
+      grid-row: 3;
+    }
+
+    .status {
+      text-align: center;
+      margin-top: 20px;
+      padding: 10px;
+      background: #f0f0f0;
+      border-radius: 10px;
+      color: #666;
+    }
+
+    .settings-btn {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      background: #888;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 1.5em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s;
+    }
+
+    .settings-btn:active {
+      background: #666;
+      transform: scale(0.95);
+    }
+
+    .control-toggle-btn {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s;
+    }
+
+    .control-toggle-btn:active {
+      background: #5568d3;
+      transform: scale(0.95);
+    }
+
+    .joystick-container {
+      display: none;
+      position: relative;
+      width: 200px;
+      height: 200px;
+      margin: 30px auto;
+      background: #f0f0f0;
+      border-radius: 50%;
+      box-shadow: inset 0 0 20px rgba(0,0,0,0.1);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .joystick-container.active {
+      display: block;
+    }
+
+    .joystick-knob {
+      position: absolute;
+      width: 80px;
+      height: 80px;
+      background: #667eea;
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      cursor: grab;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      transition: background 0.2s;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .joystick-knob:active {
+      cursor: grabbing;
+      background: #5568d3;
+    }
+
+    .controls.hide {
+      display: none;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.show {
+      display: flex;
+    }
+
+    .modal-content {
+      background: white;
+      padding: 30px;
+      border-radius: 20px;
+      max-width: 400px;
+      width: 90%;
+      position: relative;
+    }
+
+    .close-btn {
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      font-size: 2em;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: none;
+      line-height: 1;
+    }
+
+    .close-btn:hover {
+      color: #333;
+    }
+
+    .trim-control {
+      margin-top: 20px;
+    }
+
+    .back-btn {
+      position: absolute;
+      top: 15px;
+      left: 60px;
+      background: #888;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 1.2em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s;
+      text-decoration: none;
+      line-height: 1;
+    }
+
+    .back-btn:active {
+      background: #666;
+      transform: scale(0.95);
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 20px;
+      }
+
+      h1 {
+        font-size: 1.5em;
+      }
+
+      .btn {
+        padding: 15px;
+        font-size: 1em;
+      }
+
+      .settings-btn, .control-toggle-btn, .back-btn {
+        width: 35px;
+        height: 35px;
+        font-size: 1.2em;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <button class="control-toggle-btn" id="controlToggleBtn" title="Toggle Joystick">JS</button>
+    <a href="/" class="back-btn" title="Back">&lt;</a>
+    <button class="settings-btn" id="settingsBtn">*</button>
+
+    <h1>TankBot</h1>
+
+    <div class="speed-control">
+      <label class="speed-label">Speed Control</label>
+      <div class="speed-value" id="speedDisplay">Medium</div>
+      <input type="range" min="1" max="3" value="2" class="speed-slider" id="speedSlider">
+    </div>
+
+    <!-- Joystick Control -->
+    <div class="joystick-container" id="joystickContainer">
+      <div class="joystick-knob" id="joystickKnob"></div>
+    </div>
+
+    <!-- Button Controls -->
+    <div class="controls" id="buttonControls">
+      <button class="btn btn-forward" id="btnForward">^<br>Forward</button>
+      <button class="btn btn-left" id="btnLeft">&lt;<br>Left</button>
+      <button class="btn btn-stop" id="btnStop">X<br>Stop</button>
+      <button class="btn btn-right" id="btnRight">&gt;<br>Right</button>
+      <button class="btn btn-backward" id="btnBackward">v<br>Backward</button>
+    </div>
+
+    <div class="status" id="status">Connecting...</div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal" id="settingsModal">
+    <div class="modal-content">
+      <button class="close-btn" id="closeModal">X</button>
+      <h2 style="margin-top: 0; color: #333;">Settings</h2>
+
+      <div class="trim-control">
+        <label class="speed-label">Steering Trim</label>
+        <div class="speed-value" id="trimDisplay">Center</div>
+        <input type="range" min="-20" max="20" value="0" class="speed-slider" id="trimSlider">
+        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Left &lt; | &gt; Right</div>
+        <div style="font-size: 0.85em; color: #666; margin-top: 15px; line-height: 1.4;">
+          Adjust this slider to compensate for uneven track tension. If your robot drifts left, move the slider right, and vice versa.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let myClientId = Date.now();
+    const speedSlider = document.getElementById('speedSlider');
+    const speedDisplay = document.getElementById('speedDisplay');
+    const trimSlider = document.getElementById('trimSlider');
+    const trimDisplay = document.getElementById('trimDisplay');
+    const status = document.getElementById('status');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsModal = document.getElementById('settingsModal');
+    const closeModal = document.getElementById('closeModal');
+    const controlToggleBtn = document.getElementById('controlToggleBtn');
+    const joystickContainer = document.getElementById('joystickContainer');
+    const joystickKnob = document.getElementById('joystickKnob');
+    const buttonControls = document.getElementById('buttonControls');
+
+    const speedNames = ['', 'Slow', 'Medium', 'Fast'];
+    let joystickMode = false;
+    let joystickActive = false;
+
+    // Load trim from localStorage on page load (instant feedback)
+    function loadTrimFromStorage() {
+      const savedTrim = localStorage.getItem('tankbot_trim');
+      if (savedTrim !== null) {
+        const trim = parseInt(savedTrim);
+        trimSlider.value = trim;
+        updateTrimDisplay(trim);
+        console.log('Loaded trim from localStorage:', trim);
+      }
+    }
+
+    // Save trim to localStorage (client-side persistence)
+    function saveTrimToStorage(trim) {
+      localStorage.setItem('tankbot_trim', trim);
+      console.log('Saved trim to localStorage:', trim);
+    }
+
+    // Update trim display
+    function updateTrimDisplay(trim) {
+      if (trim === 0) {
+        trimDisplay.textContent = 'Center';
+      } else if (trim < 0) {
+        trimDisplay.textContent = 'Left ' + Math.abs(trim);
+      } else {
+        trimDisplay.textContent = 'Right ' + trim;
+      }
+    }
+
+    // Initialize trim from localStorage immediately
+    loadTrimFromStorage();
+
+    function connectWebSocket() {
+      // Use IP address directly to avoid captive portal DNS issues
+      const host = window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? window.location.hostname : '192.168.4.1';
+      // Connect to HTTPS WebSocket
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'wss:';
+      const port = ':443';
+      ws = new WebSocket(protocol + '//' + host + port + '/ws');
+
+      ws.onopen = function() {
+        console.log('WebSocket connected');
+        status.textContent = 'Registering...';
+        // Register as controller
+        ws.send(JSON.stringify({
+          type: 'register',
+          role: 'controller',
+          client_id: myClientId
+        }));
+      };
+
+      ws.onmessage = function(event) {
+        const msg = JSON.parse(event.data);
+        console.log('Received:', msg);
+
+        if (msg.type === 'role_accepted' && msg.role === 'controller') {
+          status.textContent = 'Connected';
+          console.log('Role accepted as controller');
+        } else if (msg.type === 'role_rejected') {
+          status.textContent = msg.reason;
+          alert(msg.reason + '. Redirecting...');
+          setTimeout(() => location.href = '/', 2000);
+        } else if (msg.type === 'trim_value') {
+          // Server sent current trim value (from ESP32 Preferences)
+          // This is the authoritative value from device power-cycle persistence
+          trimSlider.value = msg.value;
+          updateTrimDisplay(msg.value);
+          saveTrimToStorage(msg.value); // Sync localStorage with server
+          console.log('Received trim from server:', msg.value);
+        }
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+        status.textContent = 'Connection error';
+      };
+
+      ws.onclose = function() {
+        console.log('WebSocket disconnected');
+        status.textContent = 'Disconnected - Reconnecting...';
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    function sendMessage(msg) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    }
+
+    // Settings modal controls
+    settingsBtn.addEventListener('click', function() {
+      settingsModal.classList.add('show');
+    });
+
+    closeModal.addEventListener('click', function() {
+      settingsModal.classList.remove('show');
+    });
+
+    settingsModal.addEventListener('click', function(e) {
+      if (e.target === settingsModal) {
+        settingsModal.classList.remove('show');
+      }
+    });
+
+    // Control mode toggle
+    controlToggleBtn.addEventListener('click', function() {
+      joystickMode = !joystickMode;
+      if (joystickMode) {
+        joystickContainer.classList.add('active');
+        buttonControls.classList.add('hide');
+      } else {
+        joystickContainer.classList.remove('active');
+        buttonControls.classList.remove('hide');
+        sendMessage({type: 'motor', direction: 'stop', client_id: myClientId});
+      }
+    });
+
+    // Joystick control logic
+    function handleJoystick(e) {
+      e.preventDefault();
+      const rect = joystickContainer.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+
+      let clientX, clientY;
+      if (e.type.includes('touch')) {
+        clientX = e.touches[0].clientX - rect.left;
+        clientY = e.touches[0].clientY - rect.top;
+      } else {
+        clientX = e.clientX - rect.left;
+        clientY = e.clientY - rect.top;
+      }
+
+      let deltaX = clientX - centerX;
+      let deltaY = clientY - centerY;
+
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      const maxDistance = (rect.width / 2) - 40;
+
+      if (distance > maxDistance) {
+        const angle = Math.atan2(deltaY, deltaX);
+        deltaX = Math.cos(angle) * maxDistance;
+        deltaY = Math.sin(angle) * maxDistance;
+      }
+
+      joystickKnob.style.transform = `translate(calc(-50% + ${deltaX}px), calc(-50% + ${deltaY}px))`;
+
+      const forwardPower = -deltaY / maxDistance;
+      const turnPower = deltaX / maxDistance;
+
+      let leftMotor = forwardPower - turnPower;
+      let rightMotor = forwardPower + turnPower;
+
+      const maxPower = Math.max(Math.abs(leftMotor), Math.abs(rightMotor));
+      if (maxPower > 1) {
+        leftMotor /= maxPower;
+        rightMotor /= maxPower;
+      }
+
+      sendJoystickCommand(leftMotor, rightMotor);
+    }
+
+    function sendJoystickCommand(left, right) {
+      if (Math.abs(left) < 0.1 && Math.abs(right) < 0.1) {
+        sendMessage({type: 'motor', direction: 'stop', client_id: myClientId});
+      } else {
+        sendMessage({
+          type: 'joystick',
+          left: parseFloat(left.toFixed(2)),
+          right: parseFloat(right.toFixed(2)),
+          client_id: myClientId
+        });
+      }
+    }
+
+    function resetJoystick() {
+      joystickKnob.style.transform = 'translate(-50%, -50%)';
+      sendMessage({type: 'motor', direction: 'stop', client_id: myClientId});
+      joystickActive = false;
+    }
+
+    // Joystick event listeners
+    joystickKnob.addEventListener('mousedown', function() {
+      joystickActive = true;
+    });
+
+    joystickKnob.addEventListener('touchstart', function() {
+      joystickActive = true;
+    });
+
+    document.addEventListener('mousemove', function(e) {
+      if (joystickActive && joystickMode) {
+        handleJoystick(e);
+      }
+    });
+
+    document.addEventListener('touchmove', function(e) {
+      if (joystickActive && joystickMode) {
+        handleJoystick(e);
+      }
+    });
+
+    document.addEventListener('mouseup', function() {
+      if (joystickActive) {
+        resetJoystick();
+      }
+    });
+
+    document.addEventListener('touchend', function() {
+      if (joystickActive) {
+        resetJoystick();
+      }
+    });
+
+    // Speed slider
+    speedSlider.addEventListener('input', function() {
+      const speed = parseInt(this.value);
+      speedDisplay.textContent = speedNames[speed];
+      sendMessage({type: 'speed', value: speed, client_id: myClientId});
+    });
+
+    // Trim slider - save to BOTH localStorage AND server
+    trimSlider.addEventListener('input', function() {
+      const trim = parseInt(this.value);
+      updateTrimDisplay(trim);
+      saveTrimToStorage(trim); // Save to localStorage (instant, survives page refresh)
+      sendMessage({type: 'trim', value: trim, client_id: myClientId}); // Save to server (ESP32 Preferences, survives power cycle)
+    });
+
+    // Button event listeners
+    document.getElementById('btnForward').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'forward', client_id: myClientId}));
+    document.getElementById('btnForward').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'forward', client_id: myClientId}); });
+
+    document.getElementById('btnBackward').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'backward', client_id: myClientId}));
+    document.getElementById('btnBackward').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'backward', client_id: myClientId}); });
+
+    document.getElementById('btnLeft').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'left', client_id: myClientId}));
+    document.getElementById('btnLeft').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'left', client_id: myClientId}); });
+
+    document.getElementById('btnRight').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'right', client_id: myClientId}));
+    document.getElementById('btnRight').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'right', client_id: myClientId}); });
+
+    document.getElementById('btnStop').addEventListener('mousedown', () => sendMessage({type: 'motor', direction: 'stop', client_id: myClientId}));
+    document.getElementById('btnStop').addEventListener('touchstart', (e) => { e.preventDefault(); sendMessage({type: 'motor', direction: 'stop', client_id: myClientId}); });
+
+    // Stop on button release
+    document.addEventListener('mouseup', () => sendMessage({type: 'motor', direction: 'stop', client_id: myClientId}));
+    document.addEventListener('touchend', () => sendMessage({type: 'motor', direction: 'stop', client_id: myClientId}));
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
