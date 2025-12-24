@@ -1,6 +1,6 @@
 # TankBot - ESP32 Web-Controlled Tracked Robot
 
-A web-controlled tank robot built with ESP32 and L298N motor driver, featuring a responsive web interface with speed control.
+A web-controlled tank robot built with ESP32 and L298N motor driver, featuring real-time FPV video streaming, sensor data overlay, HTTPS security, and multiple control modes.
 
 
 ![TankBot in Action](images/tankbot-demo.gif)
@@ -105,43 +105,94 @@ If you encounter upload issues:
    - Password: `tankbot2025`
 
 3. **Open web interface**:
-   - Open browser and go to: `http://192.168.4.1`
+   - Captive portal will automatically open, or visit: `https://192.168.4.1`
+   - Choose your device role from the landing page:
+     - **🕹️ Basic Controls** - Simple control interface (no video)
+     - **🎮 Enhanced Controls** - Drive with FPV video and sensor data overlay
+     - **📹 Stream Device** - Use a phone's camera to stream video to the controller
+     - **👁️ View Only** - Watch the video stream without control (access via `/view`)
 
 4. **Control the robot**:
+
+   **Basic Controls Mode:**
    - **Button Mode** (default): Arrow buttons for Forward, Backward, Left, Right
      - Press and hold buttons to move, release to stop
      - Red STOP button for emergency stop
-   - **Joystick Mode**: Click 🕹 icon (top-left) to toggle joystick control
+   - **Joystick Mode**: Click JS button (top-left) to toggle joystick control
      - Drag joystick to control direction and turning simultaneously
      - Forward/backward movement + left/right steering
      - Release joystick to stop
    - Adjust speed slider for 3 speed levels: Slow, Medium, Fast (works in both modes)
 
-5. **Calibrate steering** (if robot drifts to one side):
-   - Click the ⚙️ (gear) icon in the top-right corner to open Settings
+   **Enhanced Controls Mode:**
+   - Same control options as Basic Controls
+   - Live FPV video feed from stream device
+   - Real-time sensor data overlay (orientation, GPS location, speed)
+   - Status indicator showing connection quality and FPS
+
+5. **Set up video streaming** (for Enhanced Controls):
+   - On a second device (phone/tablet), connect to TankBot WiFi
+   - Choose **📹 Stream Device** from the landing page
+   - Grant camera and location permissions when prompted
+   - Click "Start Streaming"
+   - The video will appear on any Enhanced Controls or View Only devices
+   - Adjust quality settings if needed (lower = more stable)
+
+6. **Calibrate steering** (if robot drifts to one side):
+   - In Basic Controls, click the ⚙️ (gear) icon in the top-right corner
    - Drive forward and observe which direction it drifts
-   - Adjust the "Steering Trim" slider in the settings popup:
+   - Adjust the "Steering Trim" slider:
      - If drifting LEFT: Move slider to the RIGHT
      - If drifting RIGHT: Move slider to the LEFT
    - Fine-tune until robot drives straight
-   - Close the settings popup (trim is automatically saved)
+   - Trim is automatically saved and persists across sessions
 
 ## Features
 
-- **WiFi Access Point**: Robot creates its own WiFi network
-- **Captive Portal**: Auto-popup control interface when connecting
-- **Responsive Web UI**: Works on phones, tablets, and computers
+### Core System
+- **WiFi Access Point**: Robot creates its own secure WiFi network
+- **HTTPS Security**: All communications encrypted via self-signed certificate
+- **Captive Portal**: Auto-popup control interface when connecting to WiFi
+- **Dual-Server Architecture**:
+  - HTTP server (port 80) for captive portal redirects only
+  - HTTPS server (port 443) for all content and WebSocket connections
+- **mDNS Support**: Access via https://tank.local
+- **Optimized Performance**: 4 connection slots for fast cleanup and low latency
+
+### Control Interfaces
+- **Multi-Device Support**: Four distinct roles on same network
+  - **Basic Controls** - Lightweight control interface (no video overhead)
+  - **Enhanced Controls** - Full FPV control with video and sensor overlay
+  - **Stream Device** - Dedicated camera streaming from secondary phone/tablet
+  - **View Only** - Spectator mode with video feed (no control)
+- **Responsive Web UI**: Works seamlessly on phones, tablets, and computers
 - **Dual Control Modes**: Toggle between button controls and joystick
   - Button mode: Discrete directional controls (Forward, Backward, Left, Right)
   - Joystick mode: Analog control with simultaneous forward/back and turning
+- **Touch Support**: Optimized for touch screens with mobile control
+
+### Video Streaming
+- **Real-Time FPV**: Live video stream from secondary device camera
+- **Binary WebSocket Protocol**: Chunked transmission for reliability (2.8KB chunks)
+- **Adjustable Quality**: Resolution (160p-320p), FPS (8-12), and compression settings
+- **Frame Reassembly**: Robust client-side reassembly with error handling
+- **Performance Optimized**: Zero-copy relay, no server-side logging overhead
+
+### Sensor Integration
+- **Device Orientation**: Real-time heading, pitch, and roll from phone's gyroscope
+- **GPS Tracking**: Live latitude, longitude, altitude, and speed overlay
+- **HUD Display**: On-screen sensor data overlay on Enhanced/View modes
+- **Sensor Broadcasting**: 2-second intervals to reduce ESP32 load
+
+### Motor Control
 - **Speed Control**: 3 speed levels (Slow: 160, Medium: 220, Fast: 255)
-- **Steering Trim**: Compensate for uneven track tension (-20 to +20 adjustment)
-  - Trim value is saved to flash memory and persists between power cycles
-  - Automatically loaded on startup
+- **Steering Trim**: Dual-persistence trim adjustment system
+  - Client-side: localStorage for instant persistence across page navigation
+  - Server-side: ESP32 Preferences (NVS) for persistence across power cycles
+  - Range: -20 to +20 adjustment to compensate for uneven track tension
+  - Syncs automatically between Basic and Enhanced controls
   - Works in both button and joystick modes
-- **Real-time Feedback**: Status updates on web interface
-- **Touch Support**: Works with touch screens for mobile control
-- **mDNS Support**: Access via http://tank.local
+- **Real-time Feedback**: WebSocket-based status updates on all interfaces
 
 ## Control Mechanics
 
