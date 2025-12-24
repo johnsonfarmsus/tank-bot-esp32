@@ -35,14 +35,45 @@
 
     .status-overlay {
       position: absolute;
+      top: max(50px, calc(env(safe-area-inset-top) + 50px));
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 0.75em;
+      text-align: center;
+    }
+
+    .location-overlay {
+      position: absolute;
       top: max(10px, env(safe-area-inset-top));
       right: 10px;
       background: rgba(0, 0, 0, 0.6);
       color: white;
       padding: 8px 12px;
       border-radius: 8px;
-      font-size: 0.8em;
-      max-width: 140px;
+      font-size: 0.75em;
+    }
+
+    .location-overlay div {
+      margin: 2px 0;
+    }
+
+    .sensor-overlay {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      left: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.75em;
+    }
+
+    .sensor-overlay div {
+      margin: 2px 0;
     }
 
     .status-indicator {
@@ -174,14 +205,25 @@
   <div class="overlay">
     <a href="/" class="back-btn">Back to Menu</a>
 
+    <div class="sensor-overlay">
+      <div><strong>Orientation:</strong></div>
+      <div>Heading: <span id="heading">--</span></div>
+      <div>Pitch: <span id="pitch">--</span></div>
+      <div>Roll: <span id="roll">--</span></div>
+    </div>
+
+    <div class="location-overlay">
+      <div><strong>Location:</strong></div>
+      <div>Lat: <span id="latitude">--</span></div>
+      <div>Lon: <span id="longitude">--</span></div>
+      <div>Alt: <span id="altitude">--</span></div>
+      <div>Speed: <span id="speed">--</span></div>
+    </div>
+
     <div class="status-overlay">
-      <div>
-        <span class="status-indicator" id="streamIndicator"></span>
-        <span id="streamStatus">Connecting...</span>
-      </div>
-      <div style="margin-top: 5px; font-size: 0.8em;">
-        <span id="fpsDisplay">0</span> FPS
-      </div>
+      <span class="status-indicator" id="streamIndicator"></span>
+      <span id="streamStatus">Connecting...</span>
+      | <span id="fpsDisplay">0</span> FPS
     </div>
 
     <div id="noStream" class="no-stream">
@@ -225,6 +267,13 @@
     const streamStatus = document.getElementById('streamStatus');
     const streamIndicator = document.getElementById('streamIndicator');
     const fpsDisplay = document.getElementById('fpsDisplay');
+    const headingEl = document.getElementById('heading');
+    const pitchEl = document.getElementById('pitch');
+    const rollEl = document.getElementById('roll');
+    const latitudeEl = document.getElementById('latitude');
+    const longitudeEl = document.getElementById('longitude');
+    const altitudeEl = document.getElementById('altitude');
+    const speedEl = document.getElementById('speed');
 
     const speedNames = ['', 'Slow', 'Medium', 'Fast'];
 
@@ -261,6 +310,16 @@
             streamIndicator.className = 'status-indicator inactive';
             alert(msg.reason + '. Redirecting...');
             setTimeout(() => location.href = '/', 2000);
+          } else if (msg.type === 'sensor') {
+            // Update orientation data
+            headingEl.textContent = msg.heading !== null ? msg.heading.toFixed(1) + '°' : '--';
+            pitchEl.textContent = msg.pitch !== null ? msg.pitch.toFixed(1) + '°' : '--';
+            rollEl.textContent = msg.roll !== null ? msg.roll.toFixed(1) + '°' : '--';
+            // Update location data
+            latitudeEl.textContent = msg.latitude !== null ? msg.latitude.toFixed(6) : '--';
+            longitudeEl.textContent = msg.longitude !== null ? msg.longitude.toFixed(6) : '--';
+            altitudeEl.textContent = msg.altitude !== null ? msg.altitude.toFixed(1) + ' m' : '--';
+            speedEl.textContent = msg.speed !== null ? msg.speed.toFixed(1) + ' m/s' : '--';
           }
         }
         // Handle binary messages (video chunks)

@@ -400,7 +400,7 @@
 
   <script>
     let ws = null;
-    let myClientId = null;
+    let myClientId = Date.now();
     const speedSlider = document.getElementById('speedSlider');
     const speedDisplay = document.getElementById('speedDisplay');
     const trimSlider = document.getElementById('trimSlider');
@@ -418,22 +418,74 @@
     let joystickMode = false;
     let joystickActive = false;
 
+    // Load trim from localStorage on page load (instant feedback)
+    function loadTrimFromStorage() {
+      const savedTrim = localStorage.getItem('tankbot_trim');
+      if (savedTrim !== null) {
+        const trim = parseInt(savedTrim);
+        trimSlider.value = trim;
+        updateTrimDisplay(trim);
+        console.log('Loaded trim from localStorage:', trim);
+      }
+    }
+
+    // Save trim to localStorage (client-side persistence)
+    function saveTrimToStorage(trim) {
+      localStorage.setItem('tankbot_trim', trim);
+      console.log('Saved trim to localStorage:', trim);
+    }
+
+    // Update trim display
+    function updateTrimDisplay(trim) {
+      if (trim === 0) {
+        trimDisplay.textContent = 'Center';
+      } else if (trim < 0) {
+        trimDisplay.textContent = 'Left ' + Math.abs(trim);
+      } else {
+        trimDisplay.textContent = 'Right ' + trim;
+      }
+    }
+
+    // Initialize trim from localStorage immediately
+    loadTrimFromStorage();
+
     function connectWebSocket() {
       // Use IP address directly to avoid captive portal DNS issues
       const host = window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? window.location.hostname : '192.168.4.1';
-      ws = new WebSocket('ws://' + host + ':80/ws');
+      // Connect to HTTPS WebSocket
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'wss:';
+      const port = ':443';
+      ws = new WebSocket(protocol + '//' + host + port + '/ws');
 
       ws.onopen = function() {
         console.log('WebSocket connected');
-        status.textContent = 'Connected';
+        status.textContent = 'Registering...';
+        // Register as controller
+        ws.send(JSON.stringify({
+          type: 'register',
+          role: 'controller',
+          client_id: myClientId
+        }));
       };
 
       ws.onmessage = function(event) {
         const msg = JSON.parse(event.data);
         console.log('Received:', msg);
 
-        if (msg.type === 'status') {
-          myClientId = ws.readyState === WebSocket.OPEN ? Date.now() : null;
+        if (msg.type === 'role_accepted' && msg.role === 'controller') {
+          status.textContent = 'Connected';
+          console.log('Role accepted as controller');
+        } else if (msg.type === 'role_rejected') {
+          status.textContent = msg.reason;
+          alert(msg.reason + '. Redirecting...');
+          setTimeout(() => location.href = '/', 2000);
+        } else if (msg.type === 'trim_value') {
+          // Server sent current trim value (from ESP32 Preferences)
+          // This is the authoritative value from device power-cycle persistence
+          trimSlider.value = msg.value;
+          updateTrimDisplay(msg.value);
+          saveTrimToStorage(msg.value); // Sync localStorage with server
+          console.log('Received trim from server:', msg.value);
         }
       };
 
@@ -587,17 +639,12 @@
       sendMessage({type: 'speed', value: speed, client_id: myClientId});
     });
 
-    // Trim slider
+    // Trim slider - save to BOTH localStorage AND server
     trimSlider.addEventListener('input', function() {
       const trim = parseInt(this.value);
-      if (trim === 0) {
-        trimDisplay.textContent = 'Center';
-      } else if (trim < 0) {
-        trimDisplay.textContent = 'Left ' + Math.abs(trim);
-      } else {
-        trimDisplay.textContent = 'Right ' + trim;
-      }
-      sendMessage({type: 'trim', value: trim, client_id: myClientId});
+      updateTrimDisplay(trim);
+      saveTrimToStorage(trim); // Save to localStorage (instant, survives page refresh)
+      sendMessage({type: 'trim', value: trim, client_id: myClientId}); // Save to server (ESP32 Preferences, survives power cycle)
     });
 
     // Button event listeners

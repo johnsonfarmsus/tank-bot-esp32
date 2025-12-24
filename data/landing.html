@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TankBot Control Center</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      position: fixed;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 500px;
+      width: 100%;
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 2.8em;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 1.3em;
+    }
+
+    .mode-buttons {
+      display: grid;
+      gap: 15px;
+    }
+
+    .mode-btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 25px;
+      font-size: 1.2em;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-align: left;
+      text-decoration: none;
+      display: block;
+    }
+
+    .mode-btn:hover {
+      background: #5568d3;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .mode-btn:active {
+      transform: translateY(0);
+    }
+
+    .mode-title {
+      font-weight: bold;
+      font-size: 1.4em;
+      margin-bottom: 8px;
+    }
+
+    .mode-desc {
+      font-size: 1em;
+      opacity: 0.9;
+      line-height: 1.4;
+    }
+
+    .info {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 25px;
+      font-size: 1.05em;
+      color: #856404;
+      line-height: 1.6;
+    }
+
+    .info strong {
+      color: #664d03;
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 25px;
+      }
+
+      h1 {
+        font-size: 2.2em;
+      }
+
+      .subtitle {
+        font-size: 1.1em;
+      }
+
+      .mode-btn {
+        padding: 20px;
+        font-size: 1.1em;
+      }
+
+      .mode-title {
+        font-size: 1.3em;
+      }
+
+      .info {
+        font-size: 1em;
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TankBot</h1>
+    <div class="subtitle">Control Center</div>
+
+    <div class="info">
+      <strong>Welcome!</strong> Choose your device role below to get started. Be patient, it's slow.
+    </div>
+
+    <div class="mode-buttons">
+      <a href="/basic" class="mode-btn" style="background: #888;">
+        <div class="mode-title">🕹️ Basic Controls</div>
+        <div class="mode-desc">Simple control interface (no video)</div>
+      </a>
+
+      <a href="/enhanced" class="mode-btn">
+        <div class="mode-title">🎮 Enhanced Controls</div>
+        <div class="mode-desc">Drive the bot with FPV video and sensor data overlay</div>
+      </a>
+
+      <a href="/stream-source" class="mode-btn">
+        <div class="mode-title">📹 Stream Device</div>
+        <div class="mode-desc">Use this phone's camera to stream video to the controller</div>
+      </a>
+    </div>
+  </div>
+</body>
+</html>
